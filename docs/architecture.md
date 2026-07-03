@@ -1,12 +1,46 @@
 # Architecture
 
-Nemoclaw Backend is an independent OpenAI-compatible inference server. It does
-not contain Nemoclaw Core orchestration, memory, agents, RAG, Telegram, or
-research logic.
+Nemoclaw Backend is the reusable, unified inference management backend for
+Nemoclaw. It is not only a Transformers server; the current Transformers
+runtime is the first engine implementation behind a backend-owned inference
+API.
+
+The backend owns LLM and inference functionality:
+
+- model providers and inference engines
+- model selection and model metadata
+- OpenAI-compatible inference API
+- benchmarking
+- GPU and runtime inspection
+- future Ollama, vLLM, llama.cpp, and OpenAI-compatible engine support
+
+Nemoclaw Core owns higher-level intelligence and workflow behavior:
+
+- agents
+- memory
+- planning
+- skills
+- RAG
+- research workflows
+- orchestration
+
+Core should call the backend API for inference, model listing, model selection
+state, benchmarking, and runtime inspection. It should not duplicate model
+provider, model-listing, benchmarking, or GPU/runtime logic.
 
 ## Layers
 
 ```text
+Nemoclaw Core
+  -> Nemoclaw Backend API
+    -> InferenceService
+      -> InferenceEngine
+        -> TransformersEngine
+        -> future OllamaEngine
+        -> future VLLMEngine
+        -> future LlamaCppEngine
+        -> future OpenAICompatibleEngine
+
 FastAPI
   -> InferenceService
     -> InferenceEngine
@@ -35,6 +69,10 @@ It does not know about tokenizer creation, model loading, CUDA, or Hugging Face
 Transformers internals. It validates request-level concerns, such as unsupported
 streaming, then delegates inference work to `InferenceService`.
 
+This API is the boundary Nemoclaw Core should use. Core should not import
+backend internals or reimplement backend-owned capabilities such as model
+listing, benchmarking, provider selection, or GPU inspection.
+
 ## Inference Service
 
 `services/inference.py` contains `InferenceService`, the application boundary
@@ -50,6 +88,10 @@ The service exposes only the operations currently needed by the backend:
 The service delegates to one configured engine. It does not implement model
 management, routing, benchmarking, monitoring, or multi-model behavior.
 
+As the backend grows, `InferenceService` remains the stable boundary between
+the HTTP API and engine implementations. New providers belong behind this
+service through `InferenceEngine` implementations, not in Nemoclaw Core.
+
 ## Engine Interface
 
 `engines/base.py` defines `InferenceEngine`, the minimal engine contract:
@@ -61,9 +103,14 @@ management, routing, benchmarking, monitoring, or multi-model behavior.
 - `chat`
 - `generate_text`
 
-The interface is intentionally small. Future engines such as `VLLMEngine`,
-`LlamaCppEngine`, `TensorRTEngine`, or `ONNXEngine` should implement this
-contract without requiring changes to `api.py`.
+The interface is intentionally small. Future engines such as `OllamaEngine`,
+`VLLMEngine`, `LlamaCppEngine`, `OpenAICompatibleEngine`, `TensorRTEngine`, or
+`ONNXEngine` should implement this contract without requiring changes to
+`api.py` or Nemoclaw Core.
+
+Future provider support belongs in Nemoclaw Backend. Core should select or ask
+for configured backend capabilities through the backend API rather than
+embedding provider-specific clients or model catalogs.
 
 ## Transformers Engine
 
@@ -77,6 +124,10 @@ It preserves the current deployment behavior:
 - `device_map="auto"`
 - `import torch.fx` for compatibility with old PyTorch 1.12.1
 - OpenAI-compatible chat token usage accounting
+
+Transformers is the current engine, not the permanent boundary of the backend.
+Do not add future provider logic to Core just because the current backend engine
+is Transformers.
 
 ## Compatibility
 

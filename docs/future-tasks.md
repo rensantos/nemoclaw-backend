@@ -1,5 +1,16 @@
 # Future Tasks
 
+## Product Direction
+
+- Treat Nemoclaw Backend as the reusable inference management backend, not only
+  as a Transformers server.
+- Keep Nemoclaw Core focused on agents, memory, planning, skills, RAG, research
+  workflows, and orchestration.
+- Keep LLM provider support, engine integration, model listing, model
+  selection, benchmarking, and GPU/runtime inspection inside Nemoclaw Backend.
+- Do not duplicate backend-owned model catalogs, benchmark commands, provider
+  clients, or GPU/runtime inspection logic in Nemoclaw Core.
+
 ## Operational Follow-up
 
 - Verify `./scripts/start.sh` on the UBI machine inside the `llm` Conda env.
@@ -27,7 +38,11 @@
 - Add response timing metadata only if it remains outside the OpenAI-compatible
   response body or is explicitly accepted by clients.
 - Add future engines behind `InferenceEngine` only when a phase explicitly calls
-  for them. Do not change `api.py` for engine-specific work.
+  for them. Do not change `api.py` or Nemoclaw Core for engine-specific work.
+- Future `OllamaEngine`, `VLLMEngine`, `LlamaCppEngine`, and
+  `OpenAICompatibleEngine` support belongs inside Nemoclaw Backend.
+- Do not add Ollama, vLLM, llama.cpp, OpenAI-compatible provider clients, or any
+  other new engine until an explicit implementation phase asks for it.
 - Runtime model switching and model lifecycle commands remain future work.
 - Future `backend model load`, `backend model unload`, and `backend model switch`
   commands should build on `ModelManager` without moving inference logic into it.

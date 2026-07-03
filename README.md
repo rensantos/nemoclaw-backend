@@ -1,7 +1,26 @@
 # Nemoclaw Backend
 
-Small OpenAI-compatible FastAPI backend for serving one local Hugging Face
-Transformers causal language model.
+OpenAI-compatible FastAPI backend for local and future provider-backed
+inference management.
+
+Nemoclaw Backend is the reusable, unified inference management backend for
+Nemoclaw. The current runtime serves one local Hugging Face Transformers causal
+language model, but the backend boundary is broader than Transformers.
+
+Nemoclaw Backend owns:
+
+- LLM and inference functionality
+- model providers and engines
+- model selection and model metadata
+- the inference API
+- benchmarking
+- GPU and runtime inspection
+- future Ollama, vLLM, llama.cpp, and OpenAI-compatible engines
+
+Nemoclaw Core owns agents, memory, planning, skills, RAG, research workflows,
+and orchestration. Core should call the backend API for inference, model
+listing, benchmarking, and runtime inspection instead of duplicating those
+capabilities.
 
 ## Dependency Management
 
