@@ -19,6 +19,8 @@
   responses.
 - Add response timing metadata only if it remains outside the OpenAI-compatible
   response body or is explicitly accepted by clients.
+- Add future engines behind `InferenceEngine` only when a phase explicitly calls
+  for them. Do not change `api.py` for engine-specific work.
 
 ## Testing Follow-up
 

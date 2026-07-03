@@ -30,6 +30,7 @@ conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit
 
 This project should keep a short written trail for every maintenance pass:
 
+- `docs/architecture.md` explains the API, service, and engine layers.
 - `docs/developed.md` records what has been built.
 - `docs/problems.md` records known problems and verification gaps.
 - `docs/future-tasks.md` records follow-up work.

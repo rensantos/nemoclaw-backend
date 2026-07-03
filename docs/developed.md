@@ -11,12 +11,16 @@ Hugging Face Transformers causal language model on the UBI machine.
   - `GET /v1/models`
   - `POST /v1/chat/completions`
   - `POST /generate` as a small compatibility endpoint.
+- `services/inference.py` contains `InferenceService`, which is the application
+  boundary between FastAPI and inference engines.
+- `engines/base.py` defines the minimal `InferenceEngine` interface.
+- `engines/transformers_engine.py` contains all Hugging Face Transformers,
+  PyTorch, tokenizer, and CUDA-specific runtime logic.
 - `config.py` loads configuration from:
   1. environment variables
   2. `config/config.yaml`
   3. hardcoded defaults
-- `model_runtime.py` loads the tokenizer and model once at startup using
-  Transformers, `torch_dtype=torch.float16`, and `device_map="auto"`.
+- `model_runtime.py` is a thin compatibility facade over the inference service.
 - `schemas.py` contains Pydantic request models.
 - `server.py` preserves `uvicorn server:app` compatibility and can also run
   the server directly with `python server.py`.
@@ -39,6 +43,8 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `tests/test_cli.py` contains stdlib helper tests for CLI command generation,
   health parsing, GPU status parsing, PID parsing, unmanaged status detection,
   and safe stop behavior.
+- `tests/test_inference_service.py` contains stdlib tests for service
+  delegation and the API boundary that keeps Transformers out of `api.py`.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 

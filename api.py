@@ -4,21 +4,22 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from config import settings
-from model_runtime import generate_chat, generate_text, health, list_models
+from services.inference import create_inference_service
 from schemas import ChatCompletionRequest, GenerateRequest
 
 
 router = APIRouter()
+inference_service = create_inference_service()
 
 
 @router.get("/health")
 def health_check():
-    return health()
+    return inference_service.health()
 
 
 @router.get("/v1/models")
 def models():
-    return list_models()
+    return inference_service.list_models()
 
 
 @router.post("/v1/chat/completions")
@@ -29,7 +30,7 @@ def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="messages must not be empty")
 
     model_id = req.model or settings.model_id
-    result = generate_chat(req.messages, req.max_tokens, req.temperature)
+    result = inference_service.chat(req.messages, req.max_tokens, req.temperature)
 
     return {
         "id": "chatcmpl-{}".format(uuid.uuid4().hex),
@@ -56,4 +57,8 @@ def chat_completions(req: ChatCompletionRequest):
 
 @router.post("/generate")
 def generate(req: GenerateRequest):
-    return generate_text(req.prompt, req.max_new_tokens, req.temperature)
+    return inference_service.generate_text(
+        req.prompt,
+        req.max_new_tokens,
+        req.temperature,
+    )
