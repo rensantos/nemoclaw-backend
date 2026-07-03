@@ -1,0 +1,9 @@
+backend:
+  host: 127.0.0.1
+  port: 8000
+  gpu: 0
+
+model:
+  id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  max_tokens_default: 256
+  temperature_default: 0.7

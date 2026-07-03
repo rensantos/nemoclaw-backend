@@ -1,11 +1,11 @@
 import time
 from typing import Dict, List, Optional
 
+from config import settings
+
 import torch
 import torch.fx
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from config import settings
 
 
 MODEL_ID = settings.model_id

@@ -1,36 +1,141 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+
+CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config.yaml"
+
+DEFAULTS = {
+    "backend": {
+        "host": "127.0.0.1",
+        "port": 8000,
+        "gpu": 0,
+    },
+    "model": {
+        "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        "max_tokens_default": 256,
+        "temperature_default": 0.7,
+    },
+}
 
 
 @dataclass(frozen=True)
-class Settings:
-    model_id: str
-    gpu: str
+class BackendConfig:
     host: str
     port: int
+    gpu: str
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    id: str
     max_tokens_default: int
     temperature_default: float
 
 
-def _int_env(name: str, default: int) -> int:
+@dataclass(frozen=True)
+class Config:
+    backend: BackendConfig
+    model: ModelConfig
+
+    @property
+    def host(self) -> str:
+        return self.backend.host
+
+    @property
+    def port(self) -> int:
+        return self.backend.port
+
+    @property
+    def gpu(self) -> str:
+        return self.backend.gpu
+
+    @property
+    def model_id(self) -> str:
+        return self.model.id
+
+    @property
+    def max_tokens_default(self) -> int:
+        return self.model.max_tokens_default
+
+    @property
+    def temperature_default(self) -> float:
+        return self.model.temperature_default
+
+
+def _load_yaml_config():
+    if not CONFIG_PATH.exists():
+        return {}
+
+    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+        loaded = yaml.safe_load(config_file) or {}
+
+    if not isinstance(loaded, dict):
+        raise ValueError("{} must contain a YAML mapping".format(CONFIG_PATH))
+
+    return loaded
+
+
+def _section_value(raw_config, section, key):
+    section_data = raw_config.get(section, {})
+    if not isinstance(section_data, dict):
+        return DEFAULTS[section][key]
+    return section_data.get(key, DEFAULTS[section][key])
+
+
+def _env_value(name: str, fallback):
     value = os.environ.get(name)
     if value is None or value == "":
-        return default
+        return fallback
+    return value
+
+
+def _int_env(name: str, fallback) -> int:
+    value = _env_value(name, fallback)
     return int(value)
 
 
-def _float_env(name: str, default: float) -> float:
-    value = os.environ.get(name)
-    if value is None or value == "":
-        return default
+def _float_env(name: str, fallback) -> float:
+    value = _env_value(name, fallback)
     return float(value)
 
 
-settings = Settings(
-    model_id=os.environ.get("MODEL_ID", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"),
-    gpu=os.environ.get("GPU", "0"),
-    host=os.environ.get("HOST", "127.0.0.1"),
-    port=_int_env("PORT", 8000),
-    max_tokens_default=_int_env("MAX_TOKENS_DEFAULT", 256),
-    temperature_default=_float_env("TEMPERATURE_DEFAULT", 0.7),
-)
+def load_config() -> Config:
+    raw_config = _load_yaml_config()
+
+    host = _env_value("HOST", _section_value(raw_config, "backend", "host"))
+    port = _int_env("PORT", _section_value(raw_config, "backend", "port"))
+    gpu = str(_env_value("GPU", _section_value(raw_config, "backend", "gpu")))
+    model_id = _env_value("MODEL_ID", _section_value(raw_config, "model", "id"))
+    max_tokens_default = _int_env(
+        "MAX_TOKENS_DEFAULT",
+        _section_value(raw_config, "model", "max_tokens_default"),
+    )
+    temperature_default = _float_env(
+        "TEMPERATURE_DEFAULT",
+        _section_value(raw_config, "model", "temperature_default"),
+    )
+
+    return Config(
+        backend=BackendConfig(host=host, port=port, gpu=gpu),
+        model=ModelConfig(
+            id=model_id,
+            max_tokens_default=max_tokens_default,
+            temperature_default=temperature_default,
+        ),
+    )
+
+
+config = load_config()
+settings = config
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", config.backend.gpu)
+
+
+if __name__ == "__main__":
+    print("Host: {}".format(config.backend.host))
+    print("Port: {}".format(config.backend.port))
+    print("GPU: {}".format(config.backend.gpu))
+    print("Model: {}".format(config.model.id))
