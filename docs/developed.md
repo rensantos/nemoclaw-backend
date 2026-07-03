@@ -30,6 +30,10 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `backend model list`, `backend model current`, `backend model use`, and
   `backend model info` manage configured model selection in YAML. Runtime
   hot-switching is not implemented.
+- `services/model.py` contains `ModelManager`, which owns configured model
+  metadata, selected/default model validation, and YAML selection updates.
+- `config.py` acts as the configuration provider; model business logic lives in
+  `ModelManager`.
 - `services/gpu.py` contains `GPUManager`, which is the single service used for
   GPU discovery and status reporting through `nvidia-smi` and optional
   `torch.cuda` checks.
@@ -54,7 +58,7 @@ Hugging Face Transformers causal language model on the UBI machine.
   and safe stop behavior.
 - `tests/test_inference_service.py` contains stdlib tests for service
   delegation and the API boundary that keeps Transformers out of `api.py`.
-- `tests/test_config_models.py` contains stdlib tests for configured model
+- `tests/test_model_manager.py` contains stdlib tests for configured model
   discovery and YAML selection updates.
 - `tests/test_gpu_manager.py` contains stdlib tests for GPUManager parsing and
   current-GPU reporting.

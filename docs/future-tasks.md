@@ -26,6 +26,8 @@
 - Add future engines behind `InferenceEngine` only when a phase explicitly calls
   for them. Do not change `api.py` for engine-specific work.
 - Runtime model switching and model lifecycle commands remain future work.
+- Future `backend model load`, `backend model unload`, and `backend model switch`
+  commands should build on `ModelManager` without moving inference logic into it.
 - GPU selection, multi-GPU scheduling, MIG support, CUDA affinity,
   benchmarking, and monitoring dashboards remain future work.
 

@@ -14,6 +14,10 @@ FastAPI
         -> CUDA / GPU
 
 CLI
+  -> ModelManager
+    -> Configuration
+
+CLI
   -> GPUManager
     -> nvidia-smi / torch.cuda
 ```
@@ -83,9 +87,23 @@ Phase 2 model management is configuration-level only.
 - The loaded model is owned by the running backend process and is chosen at
   startup.
 
-`backend model use <model_id>` changes YAML selection only. Runtime model
-switching, model lifecycle management, GPU management, benchmarking, monitoring,
-RAG, agents, and orchestration are outside this phase.
+`services/model.py` contains `ModelManager`, the single service responsible for:
+
+- configured models
+- selected/default model
+- model validation
+- model metadata
+- selected-model configuration updates
+
+`config.py` is a configuration provider. Model business rules belong in
+`ModelManager`.
+
+`backend model use <model_id>` calls `ModelManager` and changes YAML selection
+only. Runtime model switching, model lifecycle management, GPU management,
+benchmarking, monitoring, RAG, agents, and orchestration are outside this phase.
+
+`ModelManager` does not know about Transformers, CUDA, tokenizers, or loaded
+runtime models. `InferenceService` remains responsible for runtime inference.
 
 ## GPU Management
 

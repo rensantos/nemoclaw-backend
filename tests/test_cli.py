@@ -210,17 +210,13 @@ class CliHelperTests(unittest.TestCase):
         terminate.assert_not_called()
 
     def test_model_list_marks_current_model(self):
-        raw_config = {
-            "model": {
-                "id": "tiny",
-                "available": [
-                    {"id": "tiny", "name": "Tiny", "engine": "transformers"},
-                    {"id": "other", "name": "Other", "engine": "transformers"},
-                ],
-            }
-        }
+        models = [
+            {"id": "tiny", "name": "Tiny", "engine": "transformers"},
+            {"id": "other", "name": "Other", "engine": "transformers"},
+        ]
 
-        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+        with mock.patch.object(cli.model_manager, "selected_model_id", return_value="tiny"), \
+                mock.patch.object(cli.model_manager, "list_models", return_value=models):
             output = io.StringIO()
             with redirect_stdout(output):
                 cli.model_list()
@@ -231,16 +227,10 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("Model: other", text)
 
     def test_model_current_shows_selected_model(self):
-        raw_config = {
-            "model": {
-                "id": "tiny",
-                "available": [
-                    {"id": "tiny", "name": "Tiny", "path": "Tiny/Tiny", "engine": "transformers"}
-                ],
-            }
-        }
+        model = {"id": "tiny", "name": "Tiny", "path": "Tiny/Tiny", "engine": "transformers"}
 
-        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+        with mock.patch.object(cli.model_manager, "selected_model_id", return_value="tiny"), \
+                mock.patch.object(cli.model_manager, "current_model", return_value=model):
             output = io.StringIO()
             with redirect_stdout(output):
                 cli.model_current()
@@ -251,14 +241,7 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("Loaded model: determined by the running backend process", text)
 
     def test_model_use_rejects_invalid_model_id(self):
-        raw_config = {
-            "model": {
-                "id": "tiny",
-                "available": [{"id": "tiny"}],
-            }
-        }
-
-        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+        with mock.patch.object(cli.model_manager, "validate_model", side_effect=ValueError):
             output = io.StringIO()
             with redirect_stdout(output):
                 with self.assertRaises(cli.typer.Exit):
@@ -267,12 +250,6 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("Model is not configured: missing", output.getvalue())
 
     def test_model_use_updates_config_and_warns_when_running(self):
-        raw_config = {
-            "model": {
-                "id": "tiny",
-                "available": [{"id": "tiny"}, {"id": "other"}],
-            }
-        }
         state = cli.BackendState(
             pid=None,
             pid_running=False,
@@ -283,27 +260,23 @@ class CliHelperTests(unittest.TestCase):
             matching_processes=[],
         )
 
-        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config), \
-                mock.patch.object(cli, "update_selected_model") as update_selected, \
+        with mock.patch.object(cli.model_manager, "validate_model") as validate_model, \
+                mock.patch.object(cli.model_manager, "selected_model_id", return_value="tiny"), \
+                mock.patch.object(cli.model_manager, "select_model") as select_model, \
                 mock.patch.object(cli, "_backend_state", return_value=state):
             output = io.StringIO()
             with redirect_stdout(output):
                 cli.model_use("other")
 
-        update_selected.assert_called_once_with("other", cli.CONFIG_PATH)
+        validate_model.assert_called_once_with("other")
+        select_model.assert_called_once_with("other")
         text = output.getvalue()
         self.assertIn("Selected model updated: other", text)
         self.assertIn("Restart required", text)
 
     def test_model_info_rejects_invalid_model_id(self):
-        raw_config = {
-            "model": {
-                "id": "tiny",
-                "available": [{"id": "tiny"}],
-            }
-        }
-
-        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+        with mock.patch.object(cli.model_manager, "selected_model_id", return_value="tiny"), \
+                mock.patch.object(cli.model_manager, "model_info", side_effect=ValueError):
             output = io.StringIO()
             with redirect_stdout(output):
                 with self.assertRaises(cli.typer.Exit):

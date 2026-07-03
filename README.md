@@ -150,9 +150,10 @@ Model management in Phase 2 is configuration-level only:
 - The loaded model is whatever the currently running backend process loaded at
   startup.
 
-`backend model use <model_id>` updates the selected/default model in YAML. It
-does not hot-switch the running backend. If the backend is already running, the
-CLI prints that a restart is required.
+The CLI delegates model metadata and selection work to `ModelManager` in
+`services/model.py`. `backend model use <model_id>` updates the selected/default
+model in YAML. It does not hot-switch the running backend. If the backend is
+already running, the CLI prints that a restart is required.
 
 Examples:
 

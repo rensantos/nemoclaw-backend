@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
@@ -133,138 +132,33 @@ def load_config() -> Config:
     )
 
 
-def _model_entry_from_id(model_id: str) -> Dict[str, object]:
-    return {
-        "id": model_id,
-        "name": model_id,
-        "path": model_id,
-        "engine": "transformers",
-        "device": "cuda",
-    }
+def configured_models(raw_config=None):
+    """Compatibility wrapper. New code should use services.model.ModelManager."""
+    from services.model import ModelManager
+
+    manager = ModelManager()
+    return manager._configured_models(raw_config)
 
 
-def _normalise_model_entry(model_id: str, value) -> Dict[str, object]:
-    if isinstance(value, dict):
-        entry = dict(value)
-        entry.setdefault("id", model_id)
-    else:
-        entry = _model_entry_from_id(model_id)
+def selected_model_id(raw_config=None) -> str:
+    """Compatibility wrapper. New code should use services.model.ModelManager."""
+    from services.model import ModelManager
 
-    entry.setdefault("name", entry["id"])
-    entry.setdefault("path", entry["id"])
-    entry.setdefault("engine", "transformers")
-    entry.setdefault("device", "cuda")
-    return entry
+    return ModelManager().selected_model_id(raw_config)
 
 
-def configured_models(raw_config: Optional[dict] = None) -> List[Dict[str, object]]:
-    raw_config = load_yaml_config() if raw_config is None else raw_config
-    model_section = raw_config.get("model", {})
-    if not isinstance(model_section, dict):
-        model_section = {}
+def configured_model(model_id: str, raw_config=None):
+    """Compatibility wrapper. New code should use services.model.ModelManager."""
+    from services.model import ModelManager
 
-    selected_model_id = model_section.get("id", DEFAULTS["model"]["id"])
-    available = model_section.get("available")
-    if available is None:
-        available = raw_config.get("models")
-
-    models = []
-    if isinstance(available, list):
-        for item in available:
-            if isinstance(item, dict):
-                model_id = item.get("id") or item.get("path") or item.get("name")
-                if model_id:
-                    models.append(_normalise_model_entry(str(model_id), item))
-            elif item:
-                models.append(_model_entry_from_id(str(item)))
-    elif isinstance(available, dict):
-        for model_id, item in available.items():
-            models.append(_normalise_model_entry(str(model_id), item))
-
-    if not models:
-        models.append(_model_entry_from_id(str(selected_model_id)))
-
-    known_ids = {str(model["id"]) for model in models}
-    if str(selected_model_id) not in known_ids:
-        models.insert(0, _model_entry_from_id(str(selected_model_id)))
-
-    return models
-
-
-def selected_model_id(raw_config: Optional[dict] = None) -> str:
-    raw_config = load_yaml_config() if raw_config is None else raw_config
-    model_section = raw_config.get("model", {})
-    if not isinstance(model_section, dict):
-        return DEFAULTS["model"]["id"]
-    return str(model_section.get("id", DEFAULTS["model"]["id"]))
-
-
-def configured_model(model_id: str, raw_config: Optional[dict] = None):
-    for model in configured_models(raw_config):
-        if str(model["id"]) == model_id:
-            return model
-    return None
-
-
-def _yaml_scalar(value: str) -> str:
-    return yaml.safe_dump(
-        value,
-        default_flow_style=True,
-        width=1000000,
-    ).splitlines()[0]
-
-
-def _replace_selected_model_line(path: Path, model_id: str) -> bool:
-    lines = path.read_text(encoding="utf-8").splitlines(True)
-    in_model_section = False
-    model_indent = None
-
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        indent = len(line) - len(line.lstrip(" "))
-        if stripped.startswith("model:"):
-            in_model_section = True
-            model_indent = indent
-            continue
-
-        if in_model_section and indent <= model_indent:
-            in_model_section = False
-
-        if in_model_section and stripped.startswith("id:"):
-            prefix = line[:indent]
-            line_body = line.rstrip("\n")
-            comment = ""
-            if "#" in line_body:
-                comment = "  #" + line_body.split("#", 1)[1]
-            lines[index] = "{}id: {}{}\n".format(
-                prefix,
-                _yaml_scalar(model_id),
-                comment,
-            )
-            path.write_text("".join(lines), encoding="utf-8")
-            return True
-
-    return False
+    return ModelManager()._configured_model(model_id, raw_config)
 
 
 def update_selected_model(model_id: str, path: Path = CONFIG_PATH) -> None:
-    raw_config = load_yaml_config(path)
-    if configured_model(model_id, raw_config) is None:
-        raise ValueError("Model is not configured: {}".format(model_id))
+    """Compatibility wrapper. New code should use services.model.ModelManager."""
+    from services.model import ModelManager
 
-    if _replace_selected_model_line(path, model_id):
-        return
-
-    model_section = raw_config.setdefault("model", {})
-    if not isinstance(model_section, dict):
-        raise ValueError("model section must be a YAML mapping")
-    model_section["id"] = model_id
-
-    with path.open("w", encoding="utf-8") as config_file:
-        yaml.safe_dump(raw_config, config_file, sort_keys=False)
+    ModelManager(path).select_model(model_id)
 
 
 config = load_config()

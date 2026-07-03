@@ -14,15 +14,10 @@ from typing import List, Optional
 import typer
 
 from config import (
-    CONFIG_PATH,
     config,
-    configured_model,
-    configured_models,
-    load_yaml_config,
-    selected_model_id,
-    update_selected_model,
 )
 from services.gpu import GPUManager
+from services.model import ModelManager
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -38,6 +33,7 @@ gpu_app = typer.Typer(help="Inspect backend GPU state.")
 app.add_typer(model_app, name="model")
 app.add_typer(gpu_app, name="gpu")
 gpu_manager = GPUManager(config)
+model_manager = ModelManager()
 
 
 @dataclass
@@ -494,23 +490,22 @@ def show_config():
 @model_app.command("list")
 def model_list():
     """Show all configured models."""
-    raw_config = load_yaml_config()
-    current_id = selected_model_id(raw_config)
+    current_id = model_manager.selected_model_id()
 
     typer.echo("Configured models")
-    for model in configured_models(raw_config):
+    for model in model_manager.list_models():
         _display_model(model, current_id)
 
 
 @model_app.command("current")
 def model_current():
     """Show the selected default model."""
-    raw_config = load_yaml_config()
-    current_id = selected_model_id(raw_config)
-    model = configured_model(current_id, raw_config)
+    current_id = model_manager.selected_model_id()
 
     typer.echo("Selected/default model")
-    if model is None:
+    try:
+        model = model_manager.current_model()
+    except ValueError:
         typer.echo("Model is selected but not configured: {}".format(current_id))
         raise typer.Exit(code=1)
     _display_model(model, current_id, detailed=True)
@@ -520,20 +515,21 @@ def model_current():
 @model_app.command("use")
 def model_use(model_id: str):
     """Select a configured model for the next backend start."""
-    raw_config = load_yaml_config()
-    if configured_model(model_id, raw_config) is None:
+    try:
+        model_manager.validate_model(model_id)
+    except ValueError:
         typer.echo("Model is not configured: {}".format(model_id))
         typer.echo("Run './backend model list' to see configured models")
         raise typer.Exit(code=1)
 
-    current_id = selected_model_id(raw_config)
+    current_id = model_manager.selected_model_id()
     if model_id == current_id:
         typer.echo("Model already selected: {}".format(model_id))
         return
 
-    update_selected_model(model_id, CONFIG_PATH)
+    model_manager.select_model(model_id)
     typer.echo("Selected model updated: {}".format(model_id))
-    typer.echo("Config: {}".format(CONFIG_PATH))
+    typer.echo("Config: {}".format(model_manager.config_path))
 
     state = _backend_state()
     if state.running:
@@ -544,11 +540,11 @@ def model_use(model_id: str):
 @model_app.command("info")
 def model_info(model_id: str):
     """Show details for a configured model."""
-    raw_config = load_yaml_config()
-    model = configured_model(model_id, raw_config)
-    current_id = selected_model_id(raw_config)
+    current_id = model_manager.selected_model_id()
 
-    if model is None:
+    try:
+        model = model_manager.model_info(model_id)
+    except ValueError:
         typer.echo("Model is not configured: {}".format(model_id))
         typer.echo("Run './backend model list' to see configured models")
         raise typer.Exit(code=1)
