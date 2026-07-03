@@ -10,6 +10,8 @@
 - Verify `backend status` against the existing development launcher and the
   future systemd service once Phase 8 exists.
 - Decide when to remove the temporary shell wrappers after CLI usage settles.
+- Verify `backend model use` on the UBI machine and restart the backend to
+  confirm the selected model is loaded at process start.
 
 ## API Follow-up
 
@@ -21,6 +23,7 @@
   response body or is explicitly accepted by clients.
 - Add future engines behind `InferenceEngine` only when a phase explicitly calls
   for them. Do not change `api.py` for engine-specific work.
+- Runtime model switching and model lifecycle commands remain future work.
 
 ## Testing Follow-up
 

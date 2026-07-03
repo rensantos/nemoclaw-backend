@@ -69,3 +69,16 @@ It preserves the current deployment behavior:
 
 `model_runtime.py` remains as a thin compatibility facade over the inference
 service for any old local imports. New code should use the service layer.
+
+## Model Configuration
+
+Phase 2 model management is configuration-level only.
+
+- Configured models live in `config/config.yaml` under `model.available`.
+- The selected/default model is `model.id`.
+- The loaded model is owned by the running backend process and is chosen at
+  startup.
+
+`backend model use <model_id>` changes YAML selection only. Runtime model
+switching, model lifecycle management, GPU management, benchmarking, monitoring,
+RAG, agents, and orchestration are outside this phase.

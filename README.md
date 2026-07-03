@@ -107,6 +107,10 @@ Use the Python CLI for normal operations:
 ./backend health
 ./backend config
 ./backend logs
+./backend model list
+./backend model current
+./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
 `backend status` prints the active model, GPU, host, port, health, VRAM, and
@@ -133,6 +137,29 @@ The CLI stores runtime state in ignored local directories:
 - `logs/backend.log`
 
 The existing shell scripts are kept temporarily as wrappers around the CLI.
+
+## Model Management
+
+Model management in Phase 2 is configuration-level only:
+
+- Configured models are entries in `config/config.yaml`.
+- The selected/default model is `model.id` in `config/config.yaml`.
+- The loaded model is whatever the currently running backend process loaded at
+  startup.
+
+`backend model use <model_id>` updates the selected/default model in YAML. It
+does not hot-switch the running backend. If the backend is already running, the
+CLI prints that a restart is required.
+
+Examples:
+
+```bash
+./backend model list
+./backend model current
+./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend restart
+```
 
 ## Start
 

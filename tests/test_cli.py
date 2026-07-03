@@ -19,6 +19,9 @@ def _install_typer_stub():
         def __init__(self, *args, **kwargs):
             pass
 
+        def add_typer(self, *args, **kwargs):
+            pass
+
         def command(self, *args, **kwargs):
             def decorator(func):
                 return func
@@ -160,6 +163,108 @@ class CliHelperTests(unittest.TestCase):
                     cli.stop()
 
         terminate.assert_not_called()
+
+    def test_model_list_marks_current_model(self):
+        raw_config = {
+            "model": {
+                "id": "tiny",
+                "available": [
+                    {"id": "tiny", "name": "Tiny", "engine": "transformers"},
+                    {"id": "other", "name": "Other", "engine": "transformers"},
+                ],
+            }
+        }
+
+        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.model_list()
+
+        text = output.getvalue()
+        self.assertIn("Configured models", text)
+        self.assertIn("Model: tiny (current)", text)
+        self.assertIn("Model: other", text)
+
+    def test_model_current_shows_selected_model(self):
+        raw_config = {
+            "model": {
+                "id": "tiny",
+                "available": [
+                    {"id": "tiny", "name": "Tiny", "path": "Tiny/Tiny", "engine": "transformers"}
+                ],
+            }
+        }
+
+        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.model_current()
+
+        text = output.getvalue()
+        self.assertIn("Selected/default model", text)
+        self.assertIn("Model: tiny (current)", text)
+        self.assertIn("Loaded model: determined by the running backend process", text)
+
+    def test_model_use_rejects_invalid_model_id(self):
+        raw_config = {
+            "model": {
+                "id": "tiny",
+                "available": [{"id": "tiny"}],
+            }
+        }
+
+        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit):
+                    cli.model_use("missing")
+
+        self.assertIn("Model is not configured: missing", output.getvalue())
+
+    def test_model_use_updates_config_and_warns_when_running(self):
+        raw_config = {
+            "model": {
+                "id": "tiny",
+                "available": [{"id": "tiny"}, {"id": "other"}],
+            }
+        }
+        state = cli.BackendState(
+            pid=None,
+            pid_running=False,
+            pid_matches_backend=False,
+            health="ok",
+            health_ok=True,
+            port_open=True,
+            matching_processes=[],
+        )
+
+        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config), \
+                mock.patch.object(cli, "update_selected_model") as update_selected, \
+                mock.patch.object(cli, "_backend_state", return_value=state):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.model_use("other")
+
+        update_selected.assert_called_once_with("other", cli.CONFIG_PATH)
+        text = output.getvalue()
+        self.assertIn("Selected model updated: other", text)
+        self.assertIn("Restart required", text)
+
+    def test_model_info_rejects_invalid_model_id(self):
+        raw_config = {
+            "model": {
+                "id": "tiny",
+                "available": [{"id": "tiny"}],
+            }
+        }
+
+        with mock.patch.object(cli, "load_yaml_config", return_value=raw_config):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit):
+                    cli.model_info("missing")
+
+        self.assertIn("Model is not configured: missing", output.getvalue())
 
 
 if __name__ == "__main__":

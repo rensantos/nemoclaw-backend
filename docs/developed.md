@@ -26,7 +26,10 @@ Hugging Face Transformers causal language model on the UBI machine.
   the server directly with `python server.py`.
 - `backend` and `cli.py` provide the Typer command-line interface:
   `backend start`, `backend stop`, `backend restart`, `backend status`,
-  `backend health`, `backend config`, and `backend logs`.
+  `backend health`, `backend config`, `backend logs`, and `backend model ...`.
+- `backend model list`, `backend model current`, `backend model use`, and
+  `backend model info` manage configured model selection in YAML. Runtime
+  hot-switching is not implemented.
 - The CLI launches Uvicorn with the resolved YAML/env configuration, writes
   `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
   follow logs.
@@ -45,6 +48,8 @@ Hugging Face Transformers causal language model on the UBI machine.
   and safe stop behavior.
 - `tests/test_inference_service.py` contains stdlib tests for service
   delegation and the API boundary that keeps Transformers out of `api.py`.
+- `tests/test_config_models.py` contains stdlib tests for configured model
+  discovery and YAML selection updates.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 
