@@ -1,7 +1,9 @@
 import importlib
+import io
 import sys
 import types
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -93,6 +95,71 @@ class CliHelperTests(unittest.TestCase):
 
             with mock.patch.object(cli, "PID_FILE", pid_file):
                 self.assertIsNone(cli._read_pid())
+
+    def test_pid_matches_backend_for_uvicorn_server(self):
+        command = "/usr/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000"
+
+        with mock.patch.object(cli, "_pid_command", return_value=command):
+            self.assertTrue(cli._pid_matches_backend(123))
+
+    def test_pid_does_not_match_unrelated_python_process(self):
+        command = "/usr/bin/python unrelated.py"
+
+        with mock.patch.object(cli, "_pid_command", return_value=command):
+            self.assertFalse(cli._pid_matches_backend(123))
+
+    def test_backend_state_running_when_health_ok_without_pid(self):
+        with mock.patch.object(cli, "_read_pid", return_value=None), \
+                mock.patch.object(cli, "_health_result", return_value=("ok", True)), \
+                mock.patch.object(cli, "_port_is_open", return_value=False), \
+                mock.patch.object(cli, "_matching_backend_processes", return_value=[]):
+            state = cli._backend_state()
+
+        self.assertTrue(state.running)
+        self.assertFalse(state.managed_by_cli)
+        self.assertEqual(state.health, "ok")
+
+    def test_status_reports_unmanaged_running_backend(self):
+        state = cli.BackendState(
+            pid=None,
+            pid_running=False,
+            pid_matches_backend=False,
+            health="ok",
+            health_ok=True,
+            port_open=True,
+            matching_processes=[],
+        )
+
+        with mock.patch.object(cli, "_backend_state", return_value=state), \
+                mock.patch.object(cli, "_gpu_info", return_value=("unavailable", "unavailable")):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.status()
+
+        text = output.getvalue()
+        self.assertIn("Running: yes", text)
+        self.assertIn("Managed by CLI: no", text)
+        self.assertIn("Health: ok", text)
+
+    def test_stop_refuses_to_kill_unmanaged_backend(self):
+        state = cli.BackendState(
+            pid=None,
+            pid_running=False,
+            pid_matches_backend=False,
+            health="ok",
+            health_ok=True,
+            port_open=True,
+            matching_processes=["123 uvicorn server:app --port 8000"],
+        )
+
+        with mock.patch.object(cli, "_backend_state", return_value=state), \
+                mock.patch.object(cli, "_terminate_pid") as terminate:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit):
+                    cli.stop()
+
+        terminate.assert_not_called()
 
 
 if __name__ == "__main__":

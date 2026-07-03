@@ -26,10 +26,19 @@ Hugging Face Transformers causal language model on the UBI machine.
 - The CLI launches Uvicorn with the resolved YAML/env configuration, writes
   `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
   follow logs.
+- `backend status` uses PID, `/health`, configured port connectivity, and
+  backend process matching so externally started backends are reported as
+  running even when they are not managed by the CLI.
+- `backend stop` only stops CLI-managed PIDs. If an external launcher or systemd
+  service owns the process, it reports that state and avoids killing unrelated
+  Python or Uvicorn processes.
+- PID-file stop behavior validates the PID command line before sending signals
+  so a recycled PID is not treated as a managed backend.
 - `scripts/` contains temporary shell wrappers around the Python CLI plus config
   editing.
 - `tests/test_cli.py` contains stdlib helper tests for CLI command generation,
-  health parsing, GPU status parsing, and PID parsing.
+  health parsing, GPU status parsing, PID parsing, unmanaged status detection,
+  and safe stop behavior.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 

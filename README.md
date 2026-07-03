@@ -113,6 +113,19 @@ temperature. `backend health` calls `/health`. `backend config` prints the
 active configuration after YAML and environment overrides. `backend logs` shows
 `logs/backend.log`, and `backend logs --follow` tails it continuously.
 
+Status uses multiple signals so it still reflects reality when the backend was
+started outside the CLI:
+
+- `run/backend.pid`, when present
+- `/health`
+- configured host/port connectivity
+- a narrow backend process match
+
+`Managed by CLI: yes` means `backend stop` can safely stop the PID recorded by
+the CLI. The CLI also checks that the PID still looks like a Nemoclaw backend
+process before stopping it. If the backend is running but unmanaged, `backend
+stop` reports that state and refuses to kill processes automatically.
+
 The CLI stores runtime state in ignored local directories:
 
 - `run/backend.pid`
@@ -159,12 +172,15 @@ Example status output:
 ```text
 Backend status
 Running: yes
+Managed by CLI: no
 PID: 12345
 Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 GPU: 0
 Host: 127.0.0.1
 Port: 8000
 Health: ok
+Port open: yes
+Process match: yes
 VRAM: 512 / 16384 MiB
 Temperature: 45 C
 Log: /home/renatobox/ubi-a4000/logs/backend.log

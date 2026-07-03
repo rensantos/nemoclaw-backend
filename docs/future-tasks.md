@@ -7,6 +7,8 @@
   model loaded on the RTX A4000.
 - Verify the Typer CLI on the UBI machine, especially `backend start`,
   `backend status`, `backend health`, and `backend logs`.
+- Verify `backend status` against the existing development launcher and the
+  future systemd service once Phase 8 exists.
 - Decide when to remove the temporary shell wrappers after CLI usage settles.
 
 ## API Follow-up
