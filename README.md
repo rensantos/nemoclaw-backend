@@ -114,6 +114,10 @@ Use the Python CLI for normal operations:
 ./backend gpu list
 ./backend gpu current
 ./backend gpu monitor
+./backend benchmark latency
+./backend benchmark throughput
+./backend benchmark vram
+./backend benchmark first-token-latency
 ```
 
 `backend status` prints the active model, GPU, host, port, health, VRAM, and
@@ -190,7 +194,43 @@ current model, available memory, CUDA availability, and driver version.
 Ctrl+C.
 
 This phase does not implement GPU selection, multi-GPU scheduling, MIG, CUDA
-affinity, benchmarking, or dashboards.
+affinity, or dashboards. Benchmark commands are provided separately by
+`BenchmarkService`.
+
+## Benchmarking
+
+Benchmarking in Phase 4 is owned by `BenchmarkService` in
+`services/benchmark.py`. The CLI delegates to the service, and the service
+benchmarks the backend through the local OpenAI-compatible HTTP endpoint:
+
+```text
+CLI
+  -> BenchmarkService
+    -> http://HOST:PORT/v1/chat/completions
+```
+
+Examples:
+
+```bash
+./backend benchmark latency
+./backend benchmark throughput --runs 5 --max-tokens 128
+./backend benchmark vram --prompt "Summarize Nemoclaw in one sentence."
+./backend benchmark first-token-latency
+./backend benchmark latency --json
+```
+
+Supported options:
+
+- `--prompt`
+- `--max-tokens`
+- `--runs`
+- `--concurrency`
+- `--json`
+
+`--concurrency` is accepted so command shape is stable for future automation,
+but Phase 4 still runs requests sequentially. `first-token-latency` reports
+that the metric is unavailable until streaming is implemented; it does not fake
+the number.
 
 ## Start
 

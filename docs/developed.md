@@ -40,6 +40,16 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `backend gpu list`, `backend gpu current`, and `backend gpu monitor` expose
   informational GPU status in the CLI without adding GPU selection or
   scheduling.
+- `services/benchmark.py` contains `BenchmarkService`, which owns benchmark
+  execution against the local OpenAI-compatible HTTP API and formats benchmark
+  results for CLI or JSON output.
+- `backend benchmark latency`, `backend benchmark throughput`, `backend
+  benchmark vram`, and `backend benchmark first-token-latency` expose Phase 4
+  benchmarks without placing timing logic inside the CLI.
+- Benchmarking measures the backend as a client would by calling
+  `/v1/chat/completions`; it does not call Transformers or engines directly.
+- First-token latency reports unavailable while streaming is not implemented,
+  rather than inventing a metric.
 - The CLI launches Uvicorn with the resolved YAML/env configuration, writes
   `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
   follow logs.
@@ -62,6 +72,9 @@ Hugging Face Transformers causal language model on the UBI machine.
   discovery and YAML selection updates.
 - `tests/test_gpu_manager.py` contains stdlib tests for GPUManager parsing and
   current-GPU reporting.
+- `tests/test_benchmark_service.py` contains stdlib tests for latency,
+  throughput, VRAM snapshots, first-token-latency availability, and concurrency
+  reporting.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 

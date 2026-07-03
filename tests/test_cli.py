@@ -1,5 +1,6 @@
 import importlib
 import io
+import json
 import sys
 import types
 import unittest
@@ -327,6 +328,65 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("Selected CUDA device: 0", text)
         self.assertIn("Current model: tiny", text)
         self.assertIn("Available memory: 1024 MiB", text)
+
+    def test_benchmark_latency_delegates_to_service(self):
+        result = {
+            "benchmark": "latency",
+            "model": "tiny",
+            "gpu": "0",
+            "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+            "runs": 2,
+            "concurrency": 1,
+            "average_seconds": 1.5,
+            "min_seconds": 1.0,
+            "max_seconds": 2.0,
+            "results": [],
+        }
+
+        with mock.patch.object(cli.benchmark_service, "latency", return_value=result) as latency:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.benchmark_latency(
+                    prompt="hello",
+                    max_tokens=8,
+                    runs=2,
+                    concurrency=1,
+                    json_output=False,
+                )
+
+        latency.assert_called_once_with("hello", 8, 2, 1)
+        text = output.getvalue()
+        self.assertIn("Benchmark: latency", text)
+        self.assertIn("Average latency: 1.500 s", text)
+
+    def test_benchmark_throughput_can_print_json(self):
+        result = {
+            "benchmark": "throughput",
+            "model": "tiny",
+            "gpu": "0",
+            "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+            "runs": 1,
+            "concurrency": 1,
+            "elapsed_seconds": 2.0,
+            "requests_per_second": 0.5,
+            "tokens_per_second": 10.0,
+            "results": [],
+        }
+
+        with mock.patch.object(cli.benchmark_service, "throughput", return_value=result):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.benchmark_throughput(
+                    prompt="hello",
+                    max_tokens=8,
+                    runs=1,
+                    concurrency=1,
+                    json_output=True,
+                )
+
+        decoded = json.loads(output.getvalue())
+        self.assertEqual(decoded["benchmark"], "throughput")
+        self.assertEqual(decoded["tokens_per_second"], 10.0)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@
   confirm the selected model is loaded at process start.
 - Verify `backend gpu list`, `backend gpu current`, and `backend gpu monitor`
   on the UBI machine with the RTX A4000.
+- Verify `backend benchmark latency`, `backend benchmark throughput`, and
+  `backend benchmark vram` against the running UBI backend after the model is
+  loaded.
 
 ## API Follow-up
 
@@ -28,8 +31,11 @@
 - Runtime model switching and model lifecycle commands remain future work.
 - Future `backend model load`, `backend model unload`, and `backend model switch`
   commands should build on `ModelManager` without moving inference logic into it.
-- GPU selection, multi-GPU scheduling, MIG support, CUDA affinity,
-  benchmarking, and monitoring dashboards remain future work.
+- Implement real concurrent benchmark execution when needed. Phase 4 accepts
+  `--concurrency` but still runs requests sequentially.
+- Implement first-token latency only after streaming responses exist.
+- GPU selection, multi-GPU scheduling, MIG support, CUDA affinity, and
+  monitoring dashboards remain future work.
 
 ## Testing Follow-up
 

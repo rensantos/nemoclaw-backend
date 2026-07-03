@@ -18,6 +18,7 @@ from config import (
 )
 from services.gpu import GPUManager
 from services.model import ModelManager
+from services.benchmark import BenchmarkError, BenchmarkService
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -30,10 +31,13 @@ START_TIMEOUT_SECONDS = 120
 app = typer.Typer(help="Operate the Nemoclaw backend.", no_args_is_help=True)
 model_app = typer.Typer(help="Manage configured models.")
 gpu_app = typer.Typer(help="Inspect backend GPU state.")
+benchmark_app = typer.Typer(help="Run local backend benchmarks.")
 app.add_typer(model_app, name="model")
 app.add_typer(gpu_app, name="gpu")
+app.add_typer(benchmark_app, name="benchmark")
 gpu_manager = GPUManager(config)
 model_manager = ModelManager()
+benchmark_service = BenchmarkService(config, model_manager, gpu_manager)
 
 
 @dataclass
@@ -332,6 +336,65 @@ def _print_gpu(gpu) -> None:
     typer.echo("  Driver: {}".format(gpu.driver_version))
 
 
+def _seconds(value) -> str:
+    if value is None:
+        return "unavailable"
+    return "{:.3f} s".format(value)
+
+
+def _rate(value, suffix: str) -> str:
+    if value is None:
+        return "unavailable"
+    return "{:.3f} {}".format(value, suffix)
+
+
+def _print_vram_snapshot(label: str, snapshot) -> None:
+    typer.echo("{}:".format(label))
+    typer.echo("  GPU: {}".format(snapshot.get("gpu", "unavailable")))
+    if snapshot.get("name"):
+        typer.echo("  Name: {}".format(snapshot["name"]))
+    typer.echo("  Total VRAM: {}".format(_mib(snapshot.get("memory_total_mib"))))
+    typer.echo("  Used VRAM: {}".format(_mib(snapshot.get("memory_used_mib"))))
+    typer.echo("  Free VRAM: {}".format(_mib(snapshot.get("memory_free_mib"))))
+    typer.echo("  Temperature: {}".format(_temperature(snapshot.get("temperature_c"))))
+    typer.echo("  Utilization: {}".format(_percent(snapshot.get("utilization_percent"))))
+
+
+def _print_benchmark_result(result, json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    typer.echo("Benchmark: {}".format(result["benchmark"]))
+    typer.echo("Model: {}".format(result["model"]))
+    typer.echo("GPU: {}".format(result["gpu"]))
+    typer.echo("Endpoint: {}".format(result["endpoint"]))
+    typer.echo("Runs: {}".format(result["runs"]))
+    typer.echo("Concurrency: {}".format(result["concurrency"]))
+    if result.get("concurrency_note"):
+        typer.echo("Concurrency note: {}".format(result["concurrency_note"]))
+
+    if result["benchmark"] == "latency":
+        typer.echo("Average latency: {}".format(_seconds(result.get("average_seconds"))))
+        typer.echo("Minimum latency: {}".format(_seconds(result.get("min_seconds"))))
+        typer.echo("Maximum latency: {}".format(_seconds(result.get("max_seconds"))))
+    elif result["benchmark"] == "throughput":
+        typer.echo("Elapsed: {}".format(_seconds(result.get("elapsed_seconds"))))
+        typer.echo("Requests/sec: {}".format(
+            _rate(result.get("requests_per_second"), "requests/sec")
+        ))
+        typer.echo("Tokens/sec: {}".format(
+            _rate(result.get("tokens_per_second"), "tokens/sec")
+        ))
+    elif result["benchmark"] == "vram":
+        _print_vram_snapshot("Before", result.get("vram_before", {}))
+        _print_vram_snapshot("Peak", result.get("vram_peak", {}))
+        _print_vram_snapshot("After", result.get("vram_after", {}))
+    elif result["benchmark"] == "first-token-latency":
+        typer.echo("Available: {}".format("yes" if result.get("available") else "no"))
+        typer.echo("Message: {}".format(result.get("message")))
+
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
@@ -607,6 +670,138 @@ def gpu_monitor(interval: float = typer.Option(2.0, "--interval", "-i", min=0.5)
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("GPU monitor stopped")
+
+
+@benchmark_app.command("latency")
+def benchmark_latency(
+    prompt: str = typer.Option(
+        "Say hello from Nemoclaw in one sentence.",
+        "--prompt",
+        "-p",
+        help="Prompt to send to the local backend.",
+    ),
+    max_tokens: int = typer.Option(
+        config.model.max_tokens_default,
+        "--max-tokens",
+        min=1,
+        help="Maximum completion tokens.",
+    ),
+    runs: int = typer.Option(3, "--runs", "-r", min=1, help="Number of requests."),
+    concurrency: int = typer.Option(
+        1,
+        "--concurrency",
+        "-c",
+        min=1,
+        help="Accepted for future concurrent benchmarking; currently sequential.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print structured JSON."),
+):
+    """Measure request latency against the OpenAI-compatible endpoint."""
+    try:
+        result = benchmark_service.latency(prompt, max_tokens, runs, concurrency)
+    except (BenchmarkError, ValueError) as exc:
+        typer.echo("Benchmark failed: {}".format(exc))
+        raise typer.Exit(code=1)
+    _print_benchmark_result(result, json_output)
+
+
+@benchmark_app.command("throughput")
+def benchmark_throughput(
+    prompt: str = typer.Option(
+        "Say hello from Nemoclaw in one sentence.",
+        "--prompt",
+        "-p",
+        help="Prompt to send to the local backend.",
+    ),
+    max_tokens: int = typer.Option(
+        config.model.max_tokens_default,
+        "--max-tokens",
+        min=1,
+        help="Maximum completion tokens.",
+    ),
+    runs: int = typer.Option(3, "--runs", "-r", min=1, help="Number of requests."),
+    concurrency: int = typer.Option(
+        1,
+        "--concurrency",
+        "-c",
+        min=1,
+        help="Accepted for future concurrent benchmarking; currently sequential.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print structured JSON."),
+):
+    """Measure request and token throughput."""
+    try:
+        result = benchmark_service.throughput(prompt, max_tokens, runs, concurrency)
+    except (BenchmarkError, ValueError) as exc:
+        typer.echo("Benchmark failed: {}".format(exc))
+        raise typer.Exit(code=1)
+    _print_benchmark_result(result, json_output)
+
+
+@benchmark_app.command("vram")
+def benchmark_vram(
+    prompt: str = typer.Option(
+        "Say hello from Nemoclaw in one sentence.",
+        "--prompt",
+        "-p",
+        help="Prompt to send to the local backend.",
+    ),
+    max_tokens: int = typer.Option(
+        config.model.max_tokens_default,
+        "--max-tokens",
+        min=1,
+        help="Maximum completion tokens.",
+    ),
+    runs: int = typer.Option(3, "--runs", "-r", min=1, help="Number of requests."),
+    concurrency: int = typer.Option(
+        1,
+        "--concurrency",
+        "-c",
+        min=1,
+        help="Accepted for future concurrent benchmarking; currently sequential.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print structured JSON."),
+):
+    """Measure VRAM before, during, and after local endpoint requests."""
+    try:
+        result = benchmark_service.vram(prompt, max_tokens, runs, concurrency)
+    except (BenchmarkError, ValueError) as exc:
+        typer.echo("Benchmark failed: {}".format(exc))
+        raise typer.Exit(code=1)
+    _print_benchmark_result(result, json_output)
+
+
+@benchmark_app.command("first-token-latency")
+def benchmark_first_token_latency(
+    prompt: str = typer.Option(
+        "Say hello from Nemoclaw in one sentence.",
+        "--prompt",
+        "-p",
+        help="Prompt to send to the local backend.",
+    ),
+    max_tokens: int = typer.Option(
+        config.model.max_tokens_default,
+        "--max-tokens",
+        min=1,
+        help="Maximum completion tokens.",
+    ),
+    runs: int = typer.Option(3, "--runs", "-r", min=1, help="Number of requests."),
+    concurrency: int = typer.Option(
+        1,
+        "--concurrency",
+        "-c",
+        min=1,
+        help="Accepted for future concurrent benchmarking; currently sequential.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print structured JSON."),
+):
+    """Report first-token latency support status."""
+    try:
+        result = benchmark_service.first_token_latency(prompt, max_tokens, runs, concurrency)
+    except (BenchmarkError, ValueError) as exc:
+        typer.echo("Benchmark failed: {}".format(exc))
+        raise typer.Exit(code=1)
+    _print_benchmark_result(result, json_output)
 
 
 @app.command()

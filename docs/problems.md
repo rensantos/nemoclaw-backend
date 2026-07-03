@@ -51,3 +51,16 @@ python -c "import typer; print(typer.__version__)"
 
 `stream: true` requests return a `400` response. The endpoint accepts the field
 for OpenAI-style request compatibility, but streaming output is future work.
+
+## Benchmarks Require A Running Backend
+
+`backend benchmark ...` commands call the local OpenAI-compatible HTTP endpoint.
+They can be unit-tested without a GPU, but live benchmark numbers require the
+backend to be running with a model loaded:
+
+```bash
+./backend start
+./backend benchmark latency
+./backend benchmark throughput
+./backend benchmark vram
+```

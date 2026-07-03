@@ -20,6 +20,11 @@ CLI
 CLI
   -> GPUManager
     -> nvidia-smi / torch.cuda
+
+CLI
+  -> BenchmarkService
+    -> OpenAI-compatible backend HTTP API
+    -> ModelManager / GPUManager
 ```
 
 ## API Layer
@@ -125,4 +130,33 @@ optional `torch.cuda` checks. It does not introduce NVML bindings or monitoring
 frameworks.
 
 Phase 3 is informational only. GPU selection, multi-GPU scheduling, MIG, CUDA
-affinity, benchmarking, and dashboards are future work.
+affinity, and dashboards are future work.
+
+## Benchmarking
+
+`services/benchmark.py` contains `BenchmarkService`, the single service
+responsible for benchmark execution and result formatting.
+
+The CLI calls `BenchmarkService` for:
+
+- latency
+- throughput
+- VRAM before/peak/after
+- first-token latency availability
+
+Benchmarks call the local OpenAI-compatible endpoint exactly as a client would:
+
+```text
+BenchmarkService
+  -> http://HOST:PORT/v1/chat/completions
+```
+
+`BenchmarkService` may read model metadata from `ModelManager` and GPU state
+from `GPUManager`, but it does not call Transformers directly. This keeps
+benchmarking reusable for future monitoring and automation without coupling it
+to a specific inference engine.
+
+Phase 4 does not implement Prometheus, Grafana, dashboards, continuous
+monitoring, distributed benchmarking, or a load-testing framework. Concurrency
+is accepted in command options for API stability, but requests are still run
+sequentially. First-token latency remains unavailable until streaming exists.
