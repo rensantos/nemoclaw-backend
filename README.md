@@ -3,7 +3,38 @@
 Small OpenAI-compatible FastAPI backend for serving one local Hugging Face
 Transformers causal language model.
 
-Requires PyYAML for configuration loading.
+## Dependency Management
+
+`requirements.txt` is human-maintained and lists only direct runtime
+dependencies. Do not overwrite `requirements.txt` with `pip freeze`.
+
+`requirements-lock.txt` may be generated later with `pip freeze` for exact
+reproducibility, but it is ignored for now.
+
+Install dependencies inside the `llm` Conda environment:
+
+```bash
+source ~/miniforge3/bin/activate
+conda activate llm
+pip install -r requirements.txt
+```
+
+On the current UBI server, PyTorch is installed through Conda because of the
+old NVIDIA driver/CUDA stack:
+
+```bash
+conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch -y
+```
+
+## Project Notes
+
+This project should keep a short written trail for every maintenance pass:
+
+- `docs/developed.md` records what has been built.
+- `docs/problems.md` records known problems and verification gaps.
+- `docs/future-tasks.md` records follow-up work.
+
+When behavior changes, update the relevant doc in the same pass.
 
 ## Configuration
 

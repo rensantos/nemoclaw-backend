@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+transformers
+torch
+accelerate
+sentencepiece
+jinja2
+PyYAML
+pydantic
