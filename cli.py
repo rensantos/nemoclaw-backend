@@ -19,12 +19,26 @@ RUN_DIR = PROJECT_ROOT / "run"
 LOG_DIR = PROJECT_ROOT / "logs"
 PID_FILE = RUN_DIR / "backend.pid"
 LOG_FILE = LOG_DIR / "backend.log"
+START_TIMEOUT_SECONDS = 120
 
-app = typer.Typer(help="Operate the Nemoclaw backend.")
+app = typer.Typer(help="Operate the Nemoclaw backend.", no_args_is_help=True)
 
 
 def _health_url() -> str:
     return "http://{}:{}/health".format(config.backend.host, config.backend.port)
+
+
+def _server_command():
+    return [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "server:app",
+        "--host",
+        str(config.backend.host),
+        "--port",
+        str(config.backend.port),
+    ]
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -51,6 +65,23 @@ def _health_text() -> str:
             return body
     except urllib.error.URLError as exc:
         return "unavailable ({})".format(exc)
+
+
+def _is_healthy() -> bool:
+    try:
+        with urllib.request.urlopen(_health_url(), timeout=3) as response:
+            return 200 <= response.status < 300
+    except urllib.error.URLError:
+        return False
+
+
+def _wait_for_health(timeout_seconds: int) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if _is_healthy():
+            return True
+        time.sleep(1)
+    return False
 
 
 def _health_status() -> str:
@@ -91,6 +122,22 @@ def _gpu_info():
     return "{} / {} MiB".format(parts[0], parts[1]), "{} C".format(parts[2])
 
 
+def _remove_stale_pid(pid: Optional[int]) -> None:
+    if pid and not _pid_is_running(pid):
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+        typer.echo("Removed stale PID file for PID {}".format(pid))
+
+
+def _stop_legacy_processes() -> None:
+    patterns = [
+        "uvicorn server:app --host .* --port .*",
+        "python server.py",
+    ]
+    for pattern in patterns:
+        subprocess.run(["pkill", "-f", pattern], check=False)
+
+
 def _print_config() -> None:
     typer.echo("Host: {}".format(config.backend.host))
     typer.echo("Port: {}".format(config.backend.port))
@@ -107,8 +154,22 @@ def main(ctx: typer.Context):
 
 
 @app.command()
-def start():
+def start(
+    wait: bool = typer.Option(
+        True,
+        "--wait/--no-wait",
+        help="Wait briefly for /health after starting.",
+    ),
+    timeout: int = typer.Option(
+        START_TIMEOUT_SECONDS,
+        "--timeout",
+        min=1,
+        help="Seconds to wait for /health.",
+    ),
+):
     """Start the backend in the background."""
+    pid = _read_pid()
+    _remove_stale_pid(pid)
     pid = _read_pid()
     if pid and _pid_is_running(pid):
         typer.echo("Backend already running with PID {}".format(pid))
@@ -122,7 +183,7 @@ def start():
 
     with LOG_FILE.open("ab") as log_file:
         process = subprocess.Popen(
-            [sys.executable, "server.py"],
+            _server_command(),
             cwd=str(PROJECT_ROOT),
             env=env,
             stdout=log_file,
@@ -132,7 +193,17 @@ def start():
 
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
     typer.echo("Backend started with PID {}".format(process.pid))
+    typer.echo("Model: {}".format(config.model.id))
+    typer.echo("GPU: {}".format(config.backend.gpu))
+    typer.echo("URL: {}".format(_health_url().replace("/health", "")))
     typer.echo("Log: {}".format(LOG_FILE))
+
+    if wait:
+        if _wait_for_health(timeout):
+            typer.echo("Health: ok")
+        else:
+            typer.echo("Health: not ready after {} seconds".format(timeout))
+            typer.echo("Check logs with: ./backend logs")
 
 
 @app.command()
@@ -146,6 +217,7 @@ def stop():
                 break
             time.sleep(0.25)
         if _pid_is_running(pid):
+            typer.echo("Backend did not stop after SIGTERM; sending SIGKILL")
             os.kill(pid, signal.SIGKILL)
         typer.echo("Backend stopped")
     else:
@@ -154,26 +226,40 @@ def stop():
     if PID_FILE.exists():
         PID_FILE.unlink()
 
-    subprocess.run(["pkill", "-f", "uvicorn server:app --host .* --port .*"], check=False)
-    subprocess.run(["pkill", "-f", "python server.py"], check=False)
+    _stop_legacy_processes()
 
 
 @app.command()
-def restart():
+def restart(
+    wait: bool = typer.Option(
+        True,
+        "--wait/--no-wait",
+        help="Wait briefly for /health after starting.",
+    ),
+    timeout: int = typer.Option(
+        START_TIMEOUT_SECONDS,
+        "--timeout",
+        min=1,
+        help="Seconds to wait for /health.",
+    ),
+):
     """Restart the backend."""
     stop()
-    start()
+    start(wait=wait, timeout=timeout)
 
 
 @app.command()
 def status():
     """Show backend status."""
     pid = _read_pid()
+    _remove_stale_pid(pid)
+    pid = _read_pid()
     running = bool(pid and _pid_is_running(pid))
     vram, temperature = _gpu_info()
 
     typer.echo("Backend status")
     typer.echo("Running: {}".format("yes" if running else "no"))
+    typer.echo("PID: {}".format(pid if pid else "none"))
     typer.echo("Model: {}".format(config.model.id))
     typer.echo("GPU: {}".format(config.backend.gpu))
     typer.echo("Host: {}".format(config.backend.host))
@@ -181,12 +267,16 @@ def status():
     typer.echo("Health: {}".format(_health_status()))
     typer.echo("VRAM: {}".format(vram))
     typer.echo("Temperature: {}".format(temperature))
+    typer.echo("Log: {}".format(LOG_FILE))
 
 
 @app.command()
 def health():
     """Call the backend /health endpoint."""
-    typer.echo(_health_text())
+    body = _health_text()
+    typer.echo(body)
+    if body.startswith("unavailable"):
+        raise typer.Exit(code=1)
 
 
 @app.command("config")
@@ -196,11 +286,15 @@ def show_config():
 
 
 @app.command()
-def logs(lines: int = typer.Option(80, "--lines", "-n"), follow: bool = True):
+def logs(
+    lines: int = typer.Option(80, "--lines", "-n", min=1),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output."),
+):
     """Tail the backend log."""
     if not LOG_FILE.exists():
         typer.echo("Log file does not exist yet: {}".format(LOG_FILE))
-        raise typer.Exit(code=1)
+        typer.echo("Start the backend first with: ./backend start")
+        return
 
     cmd = ["tail", "-n", str(lines)]
     if follow:

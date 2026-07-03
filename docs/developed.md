@@ -23,8 +23,13 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `backend` and `cli.py` provide the Typer command-line interface:
   `backend start`, `backend stop`, `backend restart`, `backend status`,
   `backend health`, `backend config`, and `backend logs`.
+- The CLI launches Uvicorn with the resolved YAML/env configuration, writes
+  `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
+  follow logs.
 - `scripts/` contains temporary shell wrappers around the Python CLI plus config
   editing.
+- `tests/test_cli.py` contains stdlib helper tests for CLI command generation,
+  health parsing, GPU status parsing, and PID parsing.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 

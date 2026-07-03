@@ -24,4 +24,6 @@
   environment variables over YAML over defaults.
 - Add API tests with a mocked model runtime so endpoint response shapes can be
   checked without loading a GPU model.
+- Add CLI integration tests in the `llm` Conda environment after Typer is
+  installed there.
 - Add a deployment smoke-test checklist for the UBI machine.

@@ -110,8 +110,13 @@ Use the Python CLI for normal operations:
 
 `backend status` prints the active model, GPU, host, port, health, VRAM, and
 temperature. `backend health` calls `/health`. `backend config` prints the
-active configuration after YAML and environment overrides. `backend logs` tails
-`logs/backend.log`.
+active configuration after YAML and environment overrides. `backend logs` shows
+`logs/backend.log`, and `backend logs --follow` tails it continuously.
+
+The CLI stores runtime state in ignored local directories:
+
+- `run/backend.pid`
+- `logs/backend.log`
 
 The existing shell scripts are kept temporarily as wrappers around the CLI.
 
@@ -119,6 +124,17 @@ The existing shell scripts are kept temporarily as wrappers around the CLI.
 
 ```bash
 ./backend start
+```
+
+Example output:
+
+```text
+Backend started with PID 12345
+Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+GPU: 0
+URL: http://127.0.0.1:8000
+Log: /home/renatobox/ubi-a4000/logs/backend.log
+Health: ok
 ```
 
 Wrapper command:
@@ -134,7 +150,30 @@ conda activate llm
 ```bash
 ./backend status
 ./backend logs
+./backend logs --follow
 ./backend stop
+```
+
+Example status output:
+
+```text
+Backend status
+Running: yes
+PID: 12345
+Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+GPU: 0
+Host: 127.0.0.1
+Port: 8000
+Health: ok
+VRAM: 512 / 16384 MiB
+Temperature: 45 C
+Log: /home/renatobox/ubi-a4000/logs/backend.log
+```
+
+## Local Tests
+
+```bash
+python -m unittest discover -s tests
 ```
 
 ## API Tests
