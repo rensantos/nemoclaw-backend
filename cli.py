@@ -22,6 +22,7 @@ from config import (
     selected_model_id,
     update_selected_model,
 )
+from services.gpu import GPUManager
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -33,7 +34,10 @@ START_TIMEOUT_SECONDS = 120
 
 app = typer.Typer(help="Operate the Nemoclaw backend.", no_args_is_help=True)
 model_app = typer.Typer(help="Manage configured models.")
+gpu_app = typer.Typer(help="Inspect backend GPU state.")
 app.add_typer(model_app, name="model")
+app.add_typer(gpu_app, name="gpu")
+gpu_manager = GPUManager(config)
 
 
 @dataclass
@@ -251,33 +255,6 @@ def _backend_state() -> BackendState:
     )
 
 
-def _gpu_info():
-    query = "memory.used,memory.total,temperature.gpu"
-    cmd = [
-        "nvidia-smi",
-        "--id={}".format(config.backend.gpu),
-        "--query-gpu={}".format(query),
-        "--format=csv,noheader,nounits",
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unavailable", "unavailable"
-
-    line = result.stdout.strip().splitlines()[0]
-    parts = [part.strip() for part in line.split(",")]
-    if len(parts) < 3:
-        return "unavailable", "unavailable"
-
-    return "{} / {} MiB".format(parts[0], parts[1]), "{} C".format(parts[2])
-
-
 def _remove_stale_pid(pid: Optional[int]) -> None:
     if pid and not _pid_is_running(pid):
         if PID_FILE.exists():
@@ -324,6 +301,39 @@ def _display_model(model, current_id: str, detailed: bool = False) -> None:
             typer.echo("  Temperature default: {}".format(model["temperature_default"]))
         else:
             typer.echo("  Temperature default: {}".format(config.model.temperature_default))
+
+
+def _mib(value) -> str:
+    if value is None:
+        return "unavailable"
+    return "{} MiB".format(value)
+
+
+def _percent(value) -> str:
+    if value is None:
+        return "unavailable"
+    return "{}%".format(value)
+
+
+def _temperature(value) -> str:
+    if value is None:
+        return "unavailable"
+    return "{} C".format(value)
+
+
+def _vram_usage(gpu) -> str:
+    return "{} / {}".format(_mib(gpu.memory_used_mib), _mib(gpu.memory_total_mib))
+
+
+def _print_gpu(gpu) -> None:
+    typer.echo("GPU {}".format(gpu.index))
+    typer.echo("  Name: {}".format(gpu.name))
+    typer.echo("  Total VRAM: {}".format(_mib(gpu.memory_total_mib)))
+    typer.echo("  Used VRAM: {}".format(_mib(gpu.memory_used_mib)))
+    typer.echo("  Free VRAM: {}".format(_mib(gpu.memory_free_mib)))
+    typer.echo("  Temperature: {}".format(_temperature(gpu.temperature_c)))
+    typer.echo("  Utilization: {}".format(_percent(gpu.utilization_percent)))
+    typer.echo("  Driver: {}".format(gpu.driver_version))
 
 
 @app.callback(invoke_without_command=True)
@@ -439,7 +449,7 @@ def restart(
 def status():
     """Show backend status."""
     state = _backend_state()
-    vram, temperature = _gpu_info()
+    current_gpu = gpu_manager.current()
 
     typer.echo("Backend status")
     typer.echo("Running: {}".format("yes" if state.running else "no"))
@@ -452,8 +462,17 @@ def status():
     typer.echo("Health: {}".format(state.health))
     typer.echo("Port open: {}".format("yes" if state.port_open else "no"))
     typer.echo("Process match: {}".format("yes" if state.matching_processes else "no"))
-    typer.echo("VRAM: {}".format(vram))
-    typer.echo("Temperature: {}".format(temperature))
+    typer.echo("VRAM: {}".format(_mib(current_gpu.available_memory_mib)))
+    typer.echo("Temperature: {}".format(_temperature(
+        next(
+            (
+                gpu.temperature_c
+                for gpu in gpu_manager.detect_gpus()
+                if str(gpu.index) == str(config.backend.gpu)
+            ),
+            None,
+        )
+    )))
     typer.echo("Log: {}".format(LOG_FILE))
 
 
@@ -539,6 +558,59 @@ def model_info(model_id: str):
     typer.echo("Configured model: yes")
     typer.echo("Selected/default model: {}".format("yes" if model_id == current_id else "no"))
     typer.echo("Loaded model: determined by the running backend process")
+
+
+@gpu_app.command("list")
+def gpu_list():
+    """Show detected GPUs."""
+    gpus = gpu_manager.detect_gpus()
+    if not gpus:
+        typer.echo("No GPUs detected")
+        return
+
+    typer.echo("Detected GPUs")
+    for gpu in gpus:
+        _print_gpu(gpu)
+
+
+@gpu_app.command("current")
+def gpu_current():
+    """Show the configured backend GPU and current CUDA state."""
+    current_gpu = gpu_manager.current()
+
+    typer.echo("Current GPU")
+    typer.echo("Selected CUDA device: {}".format(current_gpu.selected_cuda_device))
+    typer.echo("Current backend GPU: {}".format(current_gpu.backend_gpu))
+    typer.echo("Current model: {}".format(current_gpu.current_model))
+    typer.echo("Available memory: {}".format(_mib(current_gpu.available_memory_mib)))
+    typer.echo("CUDA available: {}".format("yes" if current_gpu.cuda_available else "no"))
+    typer.echo("Torch current device: {}".format(current_gpu.torch_current_device))
+    typer.echo("Driver: {}".format(current_gpu.driver_version))
+
+
+@gpu_app.command("monitor")
+def gpu_monitor(interval: float = typer.Option(2.0, "--interval", "-i", min=0.5)):
+    """Refresh GPU utilization, VRAM, and temperature until Ctrl+C."""
+    typer.echo("GPU monitor. Press Ctrl+C to stop.")
+    try:
+        while True:
+            gpus = gpu_manager.detect_gpus()
+            if not gpus:
+                typer.echo("No GPUs detected")
+            else:
+                typer.echo("GPU status")
+                for gpu in gpus:
+                    typer.echo(
+                        "GPU {} | util {} | vram {} | temp {}".format(
+                            gpu.index,
+                            _percent(gpu.utilization_percent),
+                            _vram_usage(gpu),
+                            _temperature(gpu.temperature_c),
+                        )
+                    )
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("GPU monitor stopped")
 
 
 @app.command()

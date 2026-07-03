@@ -8,6 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from services.gpu import CurrentGPUInfo, GPUInfo
+
 
 def _install_typer_stub():
     if "typer" in sys.modules:
@@ -82,14 +84,46 @@ class CliHelperTests(unittest.TestCase):
         with mock.patch.object(cli, "_health_text", return_value=message):
             self.assertEqual(cli._health_status(), message)
 
-    def test_gpu_info_parses_nvidia_smi_output(self):
-        result = types.SimpleNamespace(stdout="512, 16384, 45\n", stderr="")
+    def test_status_uses_gpu_manager_for_gpu_info(self):
+        state = cli.BackendState(
+            pid=None,
+            pid_running=False,
+            pid_matches_backend=False,
+            health="unavailable",
+            health_ok=False,
+            port_open=False,
+            matching_processes=[],
+        )
+        current_gpu = CurrentGPUInfo(
+            selected_cuda_device="0",
+            backend_gpu="0",
+            current_model="tiny",
+            available_memory_mib=1024,
+            cuda_available=True,
+            torch_current_device="0",
+            driver_version="535.0",
+        )
+        detected_gpu = GPUInfo(
+            index="0",
+            name="RTX A4000",
+            memory_total_mib=16384,
+            memory_used_mib=512,
+            memory_free_mib=15872,
+            temperature_c=45,
+            utilization_percent=12,
+            driver_version="535.0",
+        )
 
-        with mock.patch.object(cli.subprocess, "run", return_value=result):
-            vram, temperature = cli._gpu_info()
+        with mock.patch.object(cli, "_backend_state", return_value=state), \
+                mock.patch.object(cli.gpu_manager, "current", return_value=current_gpu), \
+                mock.patch.object(cli.gpu_manager, "detect_gpus", return_value=[detected_gpu]):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.status()
 
-        self.assertEqual(vram, "512 / 16384 MiB")
-        self.assertEqual(temperature, "45 C")
+        text = output.getvalue()
+        self.assertIn("VRAM: 1024 MiB", text)
+        self.assertIn("Temperature: 45 C", text)
 
     def test_read_pid_returns_none_for_invalid_pid_file(self):
         with TemporaryDirectory() as tmp_dir:
@@ -133,8 +167,19 @@ class CliHelperTests(unittest.TestCase):
             matching_processes=[],
         )
 
+        current_gpu = CurrentGPUInfo(
+            selected_cuda_device="0",
+            backend_gpu="0",
+            current_model="tiny",
+            available_memory_mib=None,
+            cuda_available=False,
+            torch_current_device="unavailable",
+            driver_version="unavailable",
+        )
+
         with mock.patch.object(cli, "_backend_state", return_value=state), \
-                mock.patch.object(cli, "_gpu_info", return_value=("unavailable", "unavailable")):
+                mock.patch.object(cli.gpu_manager, "current", return_value=current_gpu), \
+                mock.patch.object(cli.gpu_manager, "detect_gpus", return_value=[]):
             output = io.StringIO()
             with redirect_stdout(output):
                 cli.status()
@@ -265,6 +310,50 @@ class CliHelperTests(unittest.TestCase):
                     cli.model_info("missing")
 
         self.assertIn("Model is not configured: missing", output.getvalue())
+
+    def test_gpu_list_uses_gpu_manager(self):
+        detected_gpu = GPUInfo(
+            index="0",
+            name="RTX A4000",
+            memory_total_mib=16384,
+            memory_used_mib=512,
+            memory_free_mib=15872,
+            temperature_c=45,
+            utilization_percent=12,
+            driver_version="535.0",
+        )
+
+        with mock.patch.object(cli.gpu_manager, "detect_gpus", return_value=[detected_gpu]):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.gpu_list()
+
+        text = output.getvalue()
+        self.assertIn("Detected GPUs", text)
+        self.assertIn("GPU 0", text)
+        self.assertIn("RTX A4000", text)
+        self.assertIn("Utilization: 12%", text)
+
+    def test_gpu_current_uses_gpu_manager(self):
+        current_gpu = CurrentGPUInfo(
+            selected_cuda_device="0",
+            backend_gpu="0",
+            current_model="tiny",
+            available_memory_mib=1024,
+            cuda_available=True,
+            torch_current_device="0",
+            driver_version="535.0",
+        )
+
+        with mock.patch.object(cli.gpu_manager, "current", return_value=current_gpu):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.gpu_current()
+
+        text = output.getvalue()
+        self.assertIn("Selected CUDA device: 0", text)
+        self.assertIn("Current model: tiny", text)
+        self.assertIn("Available memory: 1024 MiB", text)
 
 
 if __name__ == "__main__":

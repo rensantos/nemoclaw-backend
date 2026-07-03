@@ -12,6 +12,10 @@ FastAPI
     -> InferenceEngine
       -> TransformersEngine
         -> CUDA / GPU
+
+CLI
+  -> GPUManager
+    -> nvidia-smi / torch.cuda
 ```
 
 ## API Layer
@@ -82,3 +86,25 @@ Phase 2 model management is configuration-level only.
 `backend model use <model_id>` changes YAML selection only. Runtime model
 switching, model lifecycle management, GPU management, benchmarking, monitoring,
 RAG, agents, and orchestration are outside this phase.
+
+## GPU Management
+
+`services/gpu.py` contains `GPUManager`, the single service responsible for GPU
+discovery and status reporting.
+
+The CLI calls `GPUManager` for:
+
+- GPU list
+- selected/current backend GPU
+- VRAM usage
+- utilization
+- temperature
+- CUDA availability
+- driver information
+
+The implementation is intentionally lightweight and uses `nvidia-smi` plus
+optional `torch.cuda` checks. It does not introduce NVML bindings or monitoring
+frameworks.
+
+Phase 3 is informational only. GPU selection, multi-GPU scheduling, MIG, CUDA
+affinity, benchmarking, and dashboards are future work.

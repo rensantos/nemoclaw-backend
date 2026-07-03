@@ -12,6 +12,8 @@
 - Decide when to remove the temporary shell wrappers after CLI usage settles.
 - Verify `backend model use` on the UBI machine and restart the backend to
   confirm the selected model is loaded at process start.
+- Verify `backend gpu list`, `backend gpu current`, and `backend gpu monitor`
+  on the UBI machine with the RTX A4000.
 
 ## API Follow-up
 
@@ -24,6 +26,8 @@
 - Add future engines behind `InferenceEngine` only when a phase explicitly calls
   for them. Do not change `api.py` for engine-specific work.
 - Runtime model switching and model lifecycle commands remain future work.
+- GPU selection, multi-GPU scheduling, MIG support, CUDA affinity,
+  benchmarking, and monitoring dashboards remain future work.
 
 ## Testing Follow-up
 

@@ -30,6 +30,12 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `backend model list`, `backend model current`, `backend model use`, and
   `backend model info` manage configured model selection in YAML. Runtime
   hot-switching is not implemented.
+- `services/gpu.py` contains `GPUManager`, which is the single service used for
+  GPU discovery and status reporting through `nvidia-smi` and optional
+  `torch.cuda` checks.
+- `backend gpu list`, `backend gpu current`, and `backend gpu monitor` expose
+  informational GPU status in the CLI without adding GPU selection or
+  scheduling.
 - The CLI launches Uvicorn with the resolved YAML/env configuration, writes
   `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
   follow logs.
@@ -50,6 +56,8 @@ Hugging Face Transformers causal language model on the UBI machine.
   delegation and the API boundary that keeps Transformers out of `api.py`.
 - `tests/test_config_models.py` contains stdlib tests for configured model
   discovery and YAML selection updates.
+- `tests/test_gpu_manager.py` contains stdlib tests for GPUManager parsing and
+  current-GPU reporting.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
 

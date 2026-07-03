@@ -111,6 +111,9 @@ Use the Python CLI for normal operations:
 ./backend model current
 ./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend gpu list
+./backend gpu current
+./backend gpu monitor
 ```
 
 `backend status` prints the active model, GPU, host, port, health, VRAM, and
@@ -160,6 +163,33 @@ Examples:
 ./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend restart
 ```
+
+## GPU Management
+
+GPU management in Phase 3 is informational only. The CLI delegates GPU discovery
+and monitoring to `GPUManager` in `services/gpu.py`; GPU commands do not run
+`nvidia-smi` directly.
+
+Examples:
+
+```bash
+./backend gpu list
+./backend gpu current
+./backend gpu monitor
+./backend gpu monitor --interval 5
+```
+
+`backend gpu list` shows detected GPU index, name, total/used/free VRAM,
+temperature, utilization, and driver version.
+
+`backend gpu current` shows the configured backend GPU, selected CUDA device,
+current model, available memory, CUDA availability, and driver version.
+
+`backend gpu monitor` refreshes utilization, VRAM usage, and temperature until
+Ctrl+C.
+
+This phase does not implement GPU selection, multi-GPU scheduling, MIG, CUDA
+affinity, benchmarking, or dashboards.
 
 ## Start
 
