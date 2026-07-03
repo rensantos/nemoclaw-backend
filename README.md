@@ -93,25 +93,48 @@ For one-off overrides, keep the YAML unchanged and pass environment variables:
 MODEL_ID=TinyLlama/TinyLlama-1.1B-Chat-v1.0 GPU=0 ./scripts/start.sh
 ```
 
+## CLI
+
+Use the Python CLI for normal operations:
+
+```bash
+./backend
+./backend start
+./backend stop
+./backend restart
+./backend status
+./backend health
+./backend config
+./backend logs
+```
+
+`backend status` prints the active model, GPU, host, port, health, VRAM, and
+temperature. `backend health` calls `/health`. `backend config` prints the
+active configuration after YAML and environment overrides. `backend logs` tails
+`logs/backend.log`.
+
+The existing shell scripts are kept temporarily as wrappers around the CLI.
+
 ## Start
 
 ```bash
-./scripts/start.sh
+./backend start
 ```
 
-Equivalent manual command:
+Wrapper command:
 
 ```bash
 source ~/miniforge3/bin/activate
 conda activate llm
-python server.py
+./scripts/start.sh
 ```
 
-## Stop and Status
+## Stop, Status, Logs
 
 ```bash
-./scripts/status.sh
-./scripts/stop.sh
+./backend status
+./backend logs
+./backend stop
 ```
 
 ## API Tests

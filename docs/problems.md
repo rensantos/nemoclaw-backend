@@ -38,17 +38,16 @@ import support:
 python -c "import yaml; print(yaml.__version__)"
 ```
 
+## Typer Is Required For CLI Operations
+
+The `backend` command uses Typer. The `llm` Conda environment must include
+`typer` import support:
+
+```bash
+python -c "import typer; print(typer.__version__)"
+```
+
 ## Streaming Is Not Implemented
 
 `stream: true` requests return a `400` response. The endpoint accepts the field
 for OpenAI-style request compatibility, but streaming output is future work.
-
-## Stop Script Uses Process Patterns
-
-`scripts/stop.sh` uses `pkill` patterns for the supported launch styles:
-
-- `uvicorn server:app --host ... --port ...`
-- `python server.py`
-
-If process management becomes more complex, replace this with a PID file or a
-systemd user service.

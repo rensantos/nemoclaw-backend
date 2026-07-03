@@ -5,9 +5,9 @@
 - Verify `./scripts/start.sh` on the UBI machine inside the `llm` Conda env.
 - Verify `/health`, `/v1/models`, and `/v1/chat/completions` with the configured
   model loaded on the RTX A4000.
-- Update `scripts/stop.sh` so it safely stops both `uvicorn server:app` and
-  `python server.py` launch styles.
-- Consider adding a simple PID file if process management becomes unreliable.
+- Verify the Typer CLI on the UBI machine, especially `backend start`,
+  `backend status`, `backend health`, and `backend logs`.
+- Decide when to remove the temporary shell wrappers after CLI usage settles.
 
 ## API Follow-up
 

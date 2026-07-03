@@ -20,7 +20,10 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `schemas.py` contains Pydantic request models.
 - `server.py` preserves `uvicorn server:app` compatibility and can also run
   the server directly with `python server.py`.
-- `scripts/` contains operational helpers for start, stop, status, and config
+- `backend` and `cli.py` provide the Typer command-line interface:
+  `backend start`, `backend stop`, `backend restart`, `backend status`,
+  `backend health`, `backend config`, and `backend logs`.
+- `scripts/` contains temporary shell wrappers around the Python CLI plus config
   editing.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.

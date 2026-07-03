@@ -7,3 +7,4 @@ sentencepiece
 jinja2
 PyYAML
 pydantic
+typer

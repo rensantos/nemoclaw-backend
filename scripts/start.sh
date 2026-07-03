@@ -9,4 +9,4 @@ conda activate llm
 
 cd "${PROJECT_ROOT}"
 
-python server.py
+./backend start
