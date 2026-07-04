@@ -97,3 +97,29 @@ request/response behavior (the 422 vs. 501 split, and the YAML
 mutation bug under a real config file) remains verified only by
 inspection here, not by execution. Confirm both against a running
 instance on UBI before relying on them operationally.
+
+## Recommended Follow-up
+
+Priority 1 — Fix the ModelManager YAML update bug
+(services/model.py). STATUS: FIXED — exact-depth id: matching plus
+ambiguity ValueError, with the audit's reproduction case as a
+regression test. 55/55 tests passing.
+
+Priority 2 — Convert API-layer tests from source-text checks to
+behavioral request tests.
+Depends on: refactoring api.py so the FastAPI application can be
+constructed without eagerly loading the model at import (app
+factory / deferred model initialization).
+This refactor also enables:
+- truthful loading -> ready lifecycle transitions
+- lifecycle testing
+- future streaming tests
+- runtime lifecycle implementation
+Therefore it should be implemented as part of the real lifecycle
+implementation phase rather than as an isolated testing task.
+
+Priority 3 — Re-audit after Phase 5 runtime implementation lands.
+
+Note: the 501-vs-422 contract question was resolved in the same
+change that created this document (well-formed requests -> 501 stub
+body; validation failures -> standard 422). It is not an open item.
