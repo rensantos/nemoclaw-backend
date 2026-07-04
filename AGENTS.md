@@ -111,6 +111,10 @@ milestones, not merely passing tests.
   `BenchmarkService.first_token_latency` does while streaming is unavailable.
 - Do not overwrite `requirements.txt` with `pip freeze`; it is
   human-maintained direct runtime dependencies only.
+- Every completed increment or phase ends with: run the full test suite,
+  commit all changes with a concise descriptive message, and push to origin
+  main. Work is not "done" until it is pushed. Never leave completed work
+  uncommitted.
 
 ## Current State
 
@@ -126,8 +130,32 @@ Completed through Phase 4:
 - `ModelManager`, `GPUManager`, `BenchmarkService`
 - model, GPU, and benchmark CLI commands
 
-Next milestone: Phase 5 Model Lifecycle. Design first:
-`docs/model-lifecycle-design.md`.
+Phase 5 Increment 1 (state reporting only, no load/unload/switch):
+
+- `LifecycleState` enum in `services/lifecycle.py`: `unloaded`, `loading`,
+  `ready`, `unloading`, `switching`, `degraded`. Matches the state set and
+  transition table in `docs/model-lifecycle-design.md`.
+- `InferenceService` owns `lifecycle_state`, currently always `ready` after
+  the existing startup load.
+- `/health` includes `lifecycle_state` alongside the existing `status`,
+  `model`, `cuda`, `gpu` fields.
+- `./backend status` prints `Lifecycle: <state>`.
+- No runtime load/unload/switch, no worker supervision, no CUDA changes yet.
+
+Phase 5 Increment 2 (command surface stubs, no lifecycle behavior):
+
+- Management endpoints under `/admin/model/` (`load`, `unload`, `switch`),
+  separate from `/v1/*`, defined in `docs/model-lifecycle-design.md`.
+- Each always returns HTTP `501` with a fixed JSON body built by
+  `InferenceService.lifecycle_stub_response()` /
+  `services/lifecycle.lifecycle_not_implemented_response()`. Calling them
+  never changes `lifecycle_state` and never touches the engine or CUDA.
+- `./backend model load|unload|switch` call those endpoints, print the
+  `detail` message, and exit non-zero. No timeout/wait/progress logic yet;
+  that belongs to the real implementation.
+
+Next milestone: Phase 5 Increment 3, real model load/unload/switch behavior
+per `docs/model-lifecycle-design.md`.
 
 ## Commands
 
@@ -136,6 +164,7 @@ Run real CLI commands inside the `llm` Conda environment:
 ```bash
 ./backend start|stop|restart|status|health|config|logs
 ./backend model list|current|use <model_id>|info <model_id>
+./backend model load|unload|switch <model_id>   # stubs: 501 not implemented
 ./backend gpu list|current|monitor
 ./backend benchmark latency|throughput|vram|first-token-latency
 ```
