@@ -1,16 +1,21 @@
 from config import settings
 from engines.base import InferenceEngine
+from services.lifecycle import LifecycleState
 
 
 class InferenceService:
-    """Application service that delegates inference work to an engine."""
+    """Application service that owns runtime lifecycle state and delegates
+    inference work to an engine."""
 
     def __init__(self, engine: InferenceEngine):
         self.engine = engine
         self.engine.load_model()
+        self.lifecycle_state = LifecycleState.READY
 
     def health(self):
-        return self.engine.health()
+        health = dict(self.engine.health())
+        health["lifecycle_state"] = self.lifecycle_state.value
+        return health
 
     def list_models(self):
         return self.engine.list_models()

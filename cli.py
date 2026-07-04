@@ -49,6 +49,7 @@ class BackendState:
     health_ok: bool
     port_open: bool
     matching_processes: List[str]
+    lifecycle_state: str = "unknown"
 
     @property
     def running(self) -> bool:
@@ -186,6 +187,25 @@ def _health_ok() -> bool:
     return ok
 
 
+def _lifecycle_result():
+    body = _health_text()
+    if body.startswith("unavailable"):
+        return "unknown", False
+
+    try:
+        data = json.loads(body)
+        lifecycle_state = data.get("lifecycle_state", "unknown")
+    except ValueError:
+        lifecycle_state = "unknown"
+
+    return lifecycle_state, True
+
+
+def _lifecycle_state() -> str:
+    state, _ = _lifecycle_result()
+    return state
+
+
 def _port_probe_host() -> str:
     if config.backend.host in ("0.0.0.0", "::"):
         return "127.0.0.1"
@@ -252,6 +272,7 @@ def _backend_state() -> BackendState:
         health_ok=health_ok,
         port_open=_port_is_open(),
         matching_processes=_matching_backend_processes(),
+        lifecycle_state=_lifecycle_state(),
     )
 
 
@@ -519,6 +540,7 @@ def status():
     typer.echo("Host: {}".format(config.backend.host))
     typer.echo("Port: {}".format(config.backend.port))
     typer.echo("Health: {}".format(state.health))
+    typer.echo("Lifecycle: {}".format(state.lifecycle_state))
     typer.echo("Port open: {}".format("yes" if state.port_open else "no"))
     typer.echo("Process match: {}".format("yes" if state.matching_processes else "no"))
     typer.echo("VRAM: {}".format(_mib(current_gpu.available_memory_mib)))

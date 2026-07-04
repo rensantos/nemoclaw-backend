@@ -85,6 +85,48 @@ class CliHelperTests(unittest.TestCase):
         with mock.patch.object(cli, "_health_text", return_value=message):
             self.assertEqual(cli._health_status(), message)
 
+    def test_lifecycle_state_reads_json_field(self):
+        with mock.patch.object(
+            cli, "_health_text", return_value='{"status": "ok", "lifecycle_state": "ready"}'
+        ):
+            self.assertEqual(cli._lifecycle_state(), "ready")
+
+    def test_lifecycle_state_reports_unknown_when_unavailable(self):
+        message = "unavailable (connection refused)"
+        with mock.patch.object(cli, "_health_text", return_value=message):
+            self.assertEqual(cli._lifecycle_state(), "unknown")
+
+    def test_status_displays_lifecycle_state(self):
+        state = cli.BackendState(
+            pid=None,
+            pid_running=False,
+            pid_matches_backend=False,
+            health="ok",
+            health_ok=True,
+            port_open=True,
+            matching_processes=[],
+            lifecycle_state="ready",
+        )
+        current_gpu = CurrentGPUInfo(
+            selected_cuda_device="0",
+            backend_gpu="0",
+            current_model="tiny",
+            available_memory_mib=1024,
+            cuda_available=True,
+            torch_current_device="0",
+            driver_version="535.0",
+        )
+
+        with mock.patch.object(cli, "_backend_state", return_value=state), \
+                mock.patch.object(cli.gpu_manager, "current", return_value=current_gpu), \
+                mock.patch.object(cli.gpu_manager, "detect_gpus", return_value=[]):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.status()
+
+        text = output.getvalue()
+        self.assertIn("Lifecycle: ready", text)
+
     def test_status_uses_gpu_manager_for_gpu_info(self):
         state = cli.BackendState(
             pid=None,

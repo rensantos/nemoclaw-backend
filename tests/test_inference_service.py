@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 
 from services.inference import InferenceService
+from services.lifecycle import LifecycleState
 
 
 class FakeEngine:
@@ -52,10 +53,41 @@ class InferenceServiceTests(unittest.TestCase):
         engine = FakeEngine()
         service = InferenceService(engine)
 
-        self.assertEqual(service.health(), {"status": "ok"})
+        health = service.health()
+        self.assertEqual(health["status"], "ok")
         self.assertEqual(service.list_models(), {"object": "list", "data": []})
         self.assertIn("health", engine.calls)
         self.assertIn("list_models", engine.calls)
+
+    def test_default_lifecycle_state_is_ready(self):
+        service = InferenceService(FakeEngine())
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
+
+    def test_health_includes_lifecycle_state(self):
+        service = InferenceService(FakeEngine())
+
+        self.assertEqual(service.health()["lifecycle_state"], "ready")
+
+    def test_health_preserves_existing_engine_fields(self):
+        class RichFakeEngine(FakeEngine):
+            def health(self):
+                self.calls.append("health")
+                return {
+                    "status": "ok",
+                    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                    "cuda": True,
+                    "gpu": "RTX A4000",
+                }
+
+        service = InferenceService(RichFakeEngine())
+
+        health = service.health()
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["model"], "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+        self.assertTrue(health["cuda"])
+        self.assertEqual(health["gpu"], "RTX A4000")
+        self.assertEqual(health["lifecycle_state"], "ready")
 
     def test_service_delegates_chat(self):
         engine = FakeEngine()

@@ -88,6 +88,24 @@ Use explicit runtime states:
 but inference may not be available. This should be rare with the recommended
 worker restart strategy.
 
+### State Transition Table
+
+| From | May move to |
+| --- | --- |
+| `unloaded` | `loading` |
+| `loading` | `ready`, `degraded` |
+| `ready` | `unloading`, `switching` |
+| `unloading` | `unloaded`, `degraded` |
+| `switching` | `ready`, `degraded` |
+| `degraded` | `loading`, `unloaded` |
+
+This table is descriptive of the state machine the Minimal Implementation Plan
+below will implement. Increment 1 (current) only introduces the state values
+and reports them; it does not yet implement the transitions themselves. Every
+runtime `InferenceService` currently reports a fixed `ready` state, matching
+the existing startup-load-then-serve behavior. The code's state values (see
+`services/lifecycle.py`) must not diverge from this table.
+
 ## Runtime Architecture
 
 Target lifecycle architecture:

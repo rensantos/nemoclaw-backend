@@ -139,10 +139,17 @@ Use the Python CLI for normal operations:
 ./backend benchmark first-token-latency
 ```
 
-`backend status` prints the active model, GPU, host, port, health, VRAM, and
-temperature. `backend health` calls `/health`. `backend config` prints the
-active configuration after YAML and environment overrides. `backend logs` shows
-`logs/backend.log`, and `backend logs --follow` tails it continuously.
+`backend status` prints the active model, GPU, host, port, health, lifecycle
+state, VRAM, and temperature. `backend health` calls `/health`. `backend
+config` prints the active configuration after YAML and environment overrides.
+`backend logs` shows `logs/backend.log`, and `backend logs --follow` tails it
+continuously.
+
+`Lifecycle` reports the runtime state owned by `InferenceService`: `ready`,
+`loading`, `unloading`, `switching`, `unloaded`, or `degraded`. Today
+`InferenceService` always reports `ready` after startup; load/unload/switch
+transitions are a future increment. See
+`docs/model-lifecycle-design.md`.
 
 Status uses multiple signals so it still reflects reality when the backend was
 started outside the CLI:
@@ -297,6 +304,7 @@ GPU: 0
 Host: 127.0.0.1
 Port: 8000
 Health: ok
+Lifecycle: ready
 Port open: yes
 Process match: yes
 VRAM: 512 / 16384 MiB
