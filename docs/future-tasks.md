@@ -44,6 +44,9 @@
 - Do not add Ollama, vLLM, llama.cpp, OpenAI-compatible provider clients, or any
   other new engine until an explicit implementation phase asks for it.
 - Runtime model switching and model lifecycle commands remain future work.
+- Use `docs/model-lifecycle-design.md` as the Phase 5 design reference before
+  implementing `backend model load`, `backend model unload`, or `backend model
+  switch`.
 - Future `backend model load`, `backend model unload`, and `backend model switch`
   commands should build on `ModelManager` without moving inference logic into it.
 - Implement real concurrent benchmark execution when needed. Phase 4 accepts
