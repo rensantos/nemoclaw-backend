@@ -69,6 +69,49 @@ model:
         self.assertIn("# keep this comment", updated_text)
         self.assertIn("# selected model", updated_text)
 
+    def test_select_model_ignores_available_entry_id_on_continuation_line(self):
+        # Regression test for docs/audit-2dabb09.md: available: declared
+        # before id:, with the first entry's id: on a continuation line
+        # (block sequence dash on its own line, keys indented below it).
+        # The line scanner must match model.id, not available[0].id.
+        config_text = """model:
+  available:
+    -
+      id: tiny
+      path: /models/tiny
+    - id: other
+  id: tiny
+"""
+
+        with TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(config_text, encoding="utf-8")
+            manager = ModelManager(config_path)
+
+            manager.select_model("other")
+
+            updated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(updated["model"]["id"], "other")
+        self.assertEqual(updated["model"]["available"][0]["id"], "tiny")
+        self.assertEqual(updated["model"]["available"][0]["path"], "/models/tiny")
+
+    def test_select_model_raises_on_ambiguous_id_lines(self):
+        config_text = """model:
+  id: tiny
+  id: tiny
+  available:
+    - id: tiny
+"""
+
+        with TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(config_text, encoding="utf-8")
+            manager = ModelManager(config_path)
+
+            with self.assertRaises(ValueError):
+                manager.select_model("tiny")
+
     def test_select_model_rejects_unknown_model(self):
         raw_config = {
             "model": {

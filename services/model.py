@@ -127,8 +127,12 @@ class ModelManager:
 
     def _replace_selected_model_line(self, model_id: str) -> bool:
         lines = self.config_path.read_text(encoding="utf-8").splitlines(True)
+
         in_model_section = False
         model_indent = None
+        child_indent = None
+        match_index = None
+        ambiguous = False
 
         for index, line in enumerate(lines):
             stripped = line.strip()
@@ -136,26 +140,54 @@ class ModelManager:
                 continue
 
             indent = len(line) - len(line.lstrip(" "))
-            if stripped.startswith("model:"):
-                in_model_section = True
-                model_indent = indent
+
+            if not in_model_section:
+                if stripped.startswith("model:"):
+                    in_model_section = True
+                    model_indent = indent
                 continue
 
-            if in_model_section and indent <= model_indent:
-                in_model_section = False
+            if indent <= model_indent:
+                # Left the model: mapping entirely.
+                break
 
-            if in_model_section and stripped.startswith("id:"):
-                prefix = line[:indent]
-                line_body = line.rstrip("\n")
-                comment = ""
-                if "#" in line_body:
-                    comment = "  #" + line_body.split("#", 1)[1]
-                lines[index] = "{}id: {}{}\n".format(
-                    prefix,
-                    self._yaml_scalar(model_id),
-                    comment,
-                )
-                self.config_path.write_text("".join(lines), encoding="utf-8")
-                return True
+            if child_indent is None:
+                # The first key encountered directly under model: fixes the
+                # indentation depth of model's own keys (id, available, ...).
+                child_indent = indent
 
-        return False
+            if indent != child_indent:
+                # Nested content of a direct child's value (e.g. an entry of
+                # available:), never the top-level model.id.
+                continue
+
+            if stripped.startswith("id:"):
+                if match_index is not None:
+                    ambiguous = True
+                else:
+                    match_index = index
+
+        if ambiguous:
+            raise ValueError(
+                "Ambiguous 'id:' entries found directly under the model: "
+                "section of {}; refusing to guess which one selects the "
+                "active model.".format(self.config_path)
+            )
+
+        if match_index is None:
+            return False
+
+        line = lines[match_index]
+        indent = len(line) - len(line.lstrip(" "))
+        prefix = line[:indent]
+        line_body = line.rstrip("\n")
+        comment = ""
+        if "#" in line_body:
+            comment = "  #" + line_body.split("#", 1)[1]
+        lines[match_index] = "{}id: {}{}\n".format(
+            prefix,
+            self._yaml_scalar(model_id),
+            comment,
+        )
+        self.config_path.write_text("".join(lines), encoding="utf-8")
+        return True
