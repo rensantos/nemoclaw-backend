@@ -46,9 +46,19 @@ CLI (Typer)
 Future engines may include Ollama, vLLM, llama.cpp, and OpenAI-compatible
 providers. Do not implement them until explicitly requested.
 
+- Every capability has exactly one owner.
+- Services own business capabilities: inference coordination, model
+  management, GPU inspection, benchmarking, and lifecycle.
+- Engines own runtime-specific implementation: how Transformers or future
+  Ollama/vLLM/llama.cpp/OpenAI-compatible backends load models and run
+  inference.
+- CLI commands and FastAPI routes are delivery surfaces, never owners. They
+  validate input, delegate to a service, and format output.
+- Before implementing a new capability, identify its owner. If no existing
+  service or engine is the clear owner, introduce the correct one first.
 - CLI commands delegate to services.
 - Do not put business logic, timing logic, model loading, GPU inspection, or
-  provider logic directly in `cli.py`.
+  provider logic directly in `cli.py` or FastAPI routes.
 - New backend capabilities should become services or engines.
 - Benchmarks must go through the local OpenAI-compatible endpoint, never
   Transformers directly.
@@ -118,24 +128,10 @@ Next milestone: Phase 5 Model Lifecycle. Design first:
 Run real CLI commands inside the `llm` Conda environment:
 
 ```bash
-./backend start
-./backend stop
-./backend restart
-./backend status
-./backend health
-./backend config
-./backend logs
-./backend model list
-./backend model current
-./backend model use <model_id>
-./backend model info <model_id>
-./backend gpu list
-./backend gpu current
-./backend gpu monitor
-./backend benchmark latency
-./backend benchmark throughput
-./backend benchmark vram
-./backend benchmark first-token-latency
+./backend start|stop|restart|status|health|config|logs
+./backend model list|current|use <model_id>|info <model_id>
+./backend gpu list|current|monitor
+./backend benchmark latency|throughput|vram|first-token-latency
 ```
 
 Tests:
