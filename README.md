@@ -130,6 +130,9 @@ Use the Python CLI for normal operations:
 ./backend model current
 ./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend model load TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./backend model unload
+./backend model switch TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend gpu list
 ./backend gpu current
 ./backend gpu monitor
@@ -150,6 +153,13 @@ continuously.
 `InferenceService` always reports `ready` after startup; load/unload/switch
 transitions are a future increment. See
 `docs/model-lifecycle-design.md`.
+
+`backend model load`, `backend model unload`, and `backend model switch` call
+management endpoints under `/admin/model/` on the running backend. They are
+not implemented yet: the backend replies `501 Not Implemented` and the CLI
+prints that message and exits non-zero. No model is loaded, unloaded, or
+switched, and lifecycle state does not change. See
+`docs/model-lifecycle-design.md` for the full design and target behavior.
 
 Status uses multiple signals so it still reflects reality when the backend was
 started outside the CLI:
@@ -334,3 +344,31 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
     "temperature": 0.7
   }'
 ```
+
+## Lifecycle Management Endpoints (Stubs)
+
+`/admin/model/*` are management endpoints, separate from the OpenAI-compatible
+`/v1/*` namespace. They are not implemented yet and always reply `501 Not
+Implemented`:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/admin/model/load \
+  -H 'Content-Type: application/json' \
+  -d '{"model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"}'
+curl -i -X POST http://127.0.0.1:8000/admin/model/unload
+curl -i -X POST http://127.0.0.1:8000/admin/model/switch \
+  -H 'Content-Type: application/json' \
+  -d '{"model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"}'
+```
+
+Response body:
+
+```json
+{
+  "error": "not_implemented",
+  "detail": "Model lifecycle operations are not implemented yet.",
+  "lifecycle_state": "ready"
+}
+```
+
+See `docs/model-lifecycle-design.md` for the full design.

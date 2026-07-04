@@ -22,3 +22,7 @@ class GenerateRequest(BaseModel):
     prompt: str
     max_new_tokens: int = settings.max_tokens_default
     temperature: float = settings.temperature_default
+
+
+class ModelLifecycleRequest(BaseModel):
+    model_id: str

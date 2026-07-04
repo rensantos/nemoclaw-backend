@@ -327,6 +327,73 @@ class CliHelperTests(unittest.TestCase):
 
         self.assertIn("Model is not configured: missing", output.getvalue())
 
+    def test_model_load_reports_not_implemented_and_exits_nonzero(self):
+        body = json.dumps({
+            "error": "not_implemented",
+            "detail": "Model lifecycle operations are not implemented yet.",
+            "lifecycle_state": "ready",
+        })
+
+        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_load("tiny")
+
+        post_json.assert_called_once_with(
+            cli._admin_url("/admin/model/load"), {"model_id": "tiny"}
+        )
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
+
+    def test_model_unload_reports_not_implemented_and_exits_nonzero(self):
+        body = json.dumps({
+            "error": "not_implemented",
+            "detail": "Model lifecycle operations are not implemented yet.",
+            "lifecycle_state": "ready",
+        })
+
+        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_unload()
+
+        post_json.assert_called_once_with(cli._admin_url("/admin/model/unload"))
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
+
+    def test_model_switch_reports_not_implemented_and_exits_nonzero(self):
+        body = json.dumps({
+            "error": "not_implemented",
+            "detail": "Model lifecycle operations are not implemented yet.",
+            "lifecycle_state": "ready",
+        })
+
+        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_switch("other")
+
+        post_json.assert_called_once_with(
+            cli._admin_url("/admin/model/switch"), {"model_id": "other"}
+        )
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
+
+    def test_model_load_reports_unreachable_backend_and_exits_nonzero(self):
+        with mock.patch.object(
+            cli, "_post_json", return_value=(None, "unavailable (connection refused)")
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_load("tiny")
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Backend is not reachable", output.getvalue())
+
     def test_gpu_list_uses_gpu_manager(self):
         detected_gpu = GPUInfo(
             index="0",

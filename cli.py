@@ -69,6 +69,43 @@ def _health_url() -> str:
     return "http://{}:{}/health".format(config.backend.host, config.backend.port)
 
 
+def _admin_url(path: str) -> str:
+    return "http://{}:{}{}".format(config.backend.host, config.backend.port, path)
+
+
+def _post_json(url: str, payload: Optional[dict] = None):
+    """POST JSON to url. Returns (status_code, body_text); status_code is
+    None when the backend is unreachable."""
+    data = json.dumps(payload or {}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
+    except urllib.error.URLError as exc:
+        return None, "unavailable ({})".format(exc)
+
+
+def _echo_lifecycle_stub_result(status_code: Optional[int], body: str) -> None:
+    if status_code is None:
+        typer.echo("Backend is not reachable: {}".format(body))
+        return
+
+    try:
+        data = json.loads(body)
+        detail = data.get("detail", "Model lifecycle operations are not implemented yet.")
+    except ValueError:
+        detail = "Model lifecycle operations are not implemented yet."
+
+    typer.echo(detail)
+
+
 def _server_command():
     return [
         sys.executable,
@@ -639,6 +676,30 @@ def model_info(model_id: str):
     typer.echo("Configured model: yes")
     typer.echo("Selected/default model: {}".format("yes" if model_id == current_id else "no"))
     typer.echo("Loaded model: determined by the running backend process")
+
+
+@model_app.command("load")
+def model_load(model_id: str):
+    """Load a model into the running backend (not implemented yet)."""
+    status_code, body = _post_json(_admin_url("/admin/model/load"), {"model_id": model_id})
+    _echo_lifecycle_stub_result(status_code, body)
+    raise typer.Exit(code=1)
+
+
+@model_app.command("unload")
+def model_unload():
+    """Unload the currently loaded model (not implemented yet)."""
+    status_code, body = _post_json(_admin_url("/admin/model/unload"))
+    _echo_lifecycle_stub_result(status_code, body)
+    raise typer.Exit(code=1)
+
+
+@model_app.command("switch")
+def model_switch(model_id: str):
+    """Switch the running backend to a different model (not implemented yet)."""
+    status_code, body = _post_json(_admin_url("/admin/model/switch"), {"model_id": model_id})
+    _echo_lifecycle_stub_result(status_code, body)
+    raise typer.Exit(code=1)
 
 
 @gpu_app.command("list")

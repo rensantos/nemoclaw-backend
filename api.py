@@ -2,10 +2,11 @@ import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from config import settings
 from services.inference import create_inference_service
-from schemas import ChatCompletionRequest, GenerateRequest
+from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
 
 
 router = APIRouter()
@@ -62,3 +63,18 @@ def generate(req: GenerateRequest):
         req.max_new_tokens,
         req.temperature,
     )
+
+
+@router.post("/admin/model/load", status_code=501)
+def admin_model_load(req: ModelLifecycleRequest):
+    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())
+
+
+@router.post("/admin/model/unload", status_code=501)
+def admin_model_unload():
+    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())
+
+
+@router.post("/admin/model/switch", status_code=501)
+def admin_model_switch(req: ModelLifecycleRequest):
+    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())

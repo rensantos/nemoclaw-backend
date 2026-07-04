@@ -89,6 +89,26 @@ class InferenceServiceTests(unittest.TestCase):
         self.assertEqual(health["gpu"], "RTX A4000")
         self.assertEqual(health["lifecycle_state"], "ready")
 
+    def test_lifecycle_stub_response_shape(self):
+        service = InferenceService(FakeEngine())
+
+        response = service.lifecycle_stub_response()
+
+        self.assertEqual(response, {
+            "error": "not_implemented",
+            "detail": "Model lifecycle operations are not implemented yet.",
+            "lifecycle_state": "ready",
+        })
+
+    def test_lifecycle_stub_response_does_not_change_lifecycle_state(self):
+        service = InferenceService(FakeEngine())
+
+        service.lifecycle_stub_response()
+        service.lifecycle_stub_response()
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
+        self.assertEqual(service.health()["lifecycle_state"], "ready")
+
     def test_service_delegates_chat(self):
         engine = FakeEngine()
         service = InferenceService(engine)
@@ -114,6 +134,28 @@ class ApiBoundaryTests(unittest.TestCase):
 
         self.assertNotIn("transformers", api_source)
         self.assertNotIn("import torch", api_source)
+
+    def test_v1_endpoints_are_unchanged(self):
+        api_source = Path("api.py").read_text(encoding="utf-8")
+
+        self.assertIn('@router.get("/health")', api_source)
+        self.assertIn('@router.get("/v1/models")', api_source)
+        self.assertIn('@router.post("/v1/chat/completions")', api_source)
+
+    def test_admin_lifecycle_endpoints_are_declared_as_501_stubs(self):
+        api_source = Path("api.py").read_text(encoding="utf-8")
+
+        for path in (
+            "/admin/model/load",
+            "/admin/model/unload",
+            "/admin/model/switch",
+        ):
+            self.assertIn(
+                '@router.post("{}", status_code=501)'.format(path), api_source
+            )
+
+        self.assertEqual(api_source.count("lifecycle_stub_response()"), 3)
+        self.assertEqual(api_source.count("JSONResponse(status_code=501"), 3)
 
 
 if __name__ == "__main__":

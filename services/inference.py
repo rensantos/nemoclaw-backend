@@ -1,6 +1,6 @@
 from config import settings
 from engines.base import InferenceEngine
-from services.lifecycle import LifecycleState
+from services.lifecycle import LifecycleState, lifecycle_not_implemented_response
 
 
 class InferenceService:
@@ -16,6 +16,14 @@ class InferenceService:
         health = dict(self.engine.health())
         health["lifecycle_state"] = self.lifecycle_state.value
         return health
+
+    def lifecycle_stub_response(self):
+        """Fixed not-implemented body for /admin/model/* stub endpoints.
+
+        Does not change lifecycle_state; load/unload/switch are not
+        implemented yet (Phase 5 Increment 2).
+        """
+        return lifecycle_not_implemented_response(self.lifecycle_state)
 
     def list_models(self):
         return self.engine.list_models()

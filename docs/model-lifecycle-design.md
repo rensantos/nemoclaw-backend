@@ -247,9 +247,51 @@ does not change successful response schemas.
 state should be exposed through `/health`, CLI status, or a future management
 endpoint, not by changing the meaning of OpenAI model listing.
 
+## Management Endpoint Namespace
+
+Lifecycle management lives under `/admin/`, separate from the OpenAI-compatible
+`/v1/*` namespace, so lifecycle operations can never be mistaken for inference
+traffic and `/v1/*` compatibility guarantees never apply to them:
+
+- `POST /admin/model/load`
+- `POST /admin/model/unload`
+- `POST /admin/model/switch`
+
+`/admin/*` endpoints are internal management surface for the CLI (and future
+Core callers). They are not OpenAI-compatible and carry no API stability
+guarantee beyond this document.
+
+### Increment 2: Command Surface (Stubs)
+
+Phase 5 Increment 2 establishes this endpoint surface and the corresponding
+CLI commands without implementing any lifecycle behavior:
+
+- Each `/admin/model/*` endpoint always returns HTTP `501 Not Implemented`
+  with this exact JSON body:
+
+  ```json
+  {
+    "error": "not_implemented",
+    "detail": "Model lifecycle operations are not implemented yet.",
+    "lifecycle_state": "ready"
+  }
+  ```
+
+- `lifecycle_state` reflects `InferenceService.lifecycle_state` at call time.
+  Calling any stub endpoint never changes it.
+- No CUDA operations, no engine calls, no model changes happen when these
+  endpoints are called.
+- `./backend model load <model_id>`, `./backend model unload`, and
+  `./backend model switch <model_id>` call these endpoints, print the
+  `detail` message, and exit non-zero. They do not yet accept the
+  `--timeout`/`--wait`/`--poll-interval`/`--json` options described below —
+  those belong to the real implementation in a later increment.
+
 ## CLI Behavior
 
-Lifecycle commands should provide timeout and progress feedback:
+The CLI options below describe the target lifecycle command behavior once
+load/unload/switch are actually implemented. Lifecycle commands should
+provide timeout and progress feedback:
 
 ```bash
 ./backend model load <model_id> --timeout 600 --wait
