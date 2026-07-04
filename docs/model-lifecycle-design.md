@@ -266,8 +266,8 @@ guarantee beyond this document.
 Phase 5 Increment 2 establishes this endpoint surface and the corresponding
 CLI commands without implementing any lifecycle behavior:
 
-- Each `/admin/model/*` endpoint always returns HTTP `501 Not Implemented`
-  with this exact JSON body:
+- For a well-formed request, each `/admin/model/*` endpoint returns HTTP
+  `501 Not Implemented` with this exact JSON body:
 
   ```json
   {
@@ -277,6 +277,12 @@ CLI commands without implementing any lifecycle behavior:
   }
   ```
 
+- `/admin/model/load` and `/admin/model/switch` bind a required
+  `ModelLifecycleRequest` body (`model_id: str`). A missing or malformed
+  body fails FastAPI request validation before the handler runs, and the
+  caller gets FastAPI's standard `422 Unprocessable Entity` instead of the
+  `501` stub body. `/admin/model/unload` takes no body and always returns
+  `501`.
 - `lifecycle_state` reflects `InferenceService.lifecycle_state` at call time.
   Calling any stub endpoint never changes it.
 - No CUDA operations, no engine calls, no model changes happen when these

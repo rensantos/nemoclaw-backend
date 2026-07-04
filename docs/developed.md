@@ -77,6 +77,20 @@ Hugging Face Transformers causal language model on the UBI machine.
   reporting.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
+- `services/lifecycle.py` contains the `LifecycleState` enum and the fixed
+  stub response builder for `/admin/model/*` (Phase 5).
+- `InferenceService` owns `lifecycle_state`, currently always `ready`;
+  `/health` reports it alongside `status`, `model`, `cuda`, and `gpu`.
+  `backend status` prints `Lifecycle: <state>`.
+- `api.py` exposes `/admin/model/load`, `/admin/model/unload`, and
+  `/admin/model/switch` under `/admin/`, separate from `/v1/*`. For a
+  well-formed request each returns HTTP `501` with a fixed JSON body and
+  never changes `lifecycle_state` or touches the engine/CUDA. `load` and
+  `switch` require a `ModelLifecycleRequest` body (`model_id: str`); a
+  missing/malformed body returns FastAPI's standard `422` instead of the
+  `501` stub. `unload` takes no body and always returns `501`.
+- `backend model load|unload|switch` call those endpoints, print the
+  `detail` message, and exit non-zero. No timeout/wait/progress logic yet.
 
 ## Configuration
 

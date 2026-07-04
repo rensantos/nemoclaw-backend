@@ -146,10 +146,14 @@ Phase 5 Increment 2 (command surface stubs, no lifecycle behavior):
 
 - Management endpoints under `/admin/model/` (`load`, `unload`, `switch`),
   separate from `/v1/*`, defined in `docs/model-lifecycle-design.md`.
-- Each always returns HTTP `501` with a fixed JSON body built by
-  `InferenceService.lifecycle_stub_response()` /
-  `services/lifecycle.lifecycle_not_implemented_response()`. Calling them
-  never changes `lifecycle_state` and never touches the engine or CUDA.
+- For well-formed requests, each returns HTTP `501` with a fixed JSON body
+  built by `InferenceService.lifecycle_stub_response()` /
+  `services/lifecycle.lifecycle_not_implemented_response()`. `load` and
+  `switch` require a `ModelLifecycleRequest` body (`model_id: str`); a
+  missing/malformed body fails FastAPI validation first and returns the
+  standard `422`, not the `501` stub. `unload` takes no body and always
+  returns `501`. Calling any of them never changes `lifecycle_state` and
+  never touches the engine or CUDA.
 - `./backend model load|unload|switch` call those endpoints, print the
   `detail` message, and exit non-zero. No timeout/wait/progress logic yet;
   that belongs to the real implementation.

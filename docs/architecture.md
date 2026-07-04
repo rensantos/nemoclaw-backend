@@ -211,3 +211,34 @@ Phase 4 does not implement Prometheus, Grafana, dashboards, continuous
 monitoring, distributed benchmarking, or a load-testing framework. Concurrency
 is accepted in command options for API stability, but requests are still run
 sequentially. First-token latency remains unavailable until streaming exists.
+
+## Model Lifecycle (Phase 5)
+
+`services/lifecycle.py` defines `LifecycleState`
+(`unloaded`/`loading`/`ready`/`unloading`/`switching`/`degraded`) and
+`lifecycle_not_implemented_response()`, the fixed stub body used by the
+`/admin/model/*` endpoints. The full state machine and design rationale
+live in `docs/model-lifecycle-design.md`.
+
+Increment 1 adds state reporting only: `InferenceService` owns
+`lifecycle_state`, currently always `ready` after the existing startup
+load, and exposes it through `/health` alongside `status`, `model`,
+`cuda`, and `gpu`. `./backend status` prints `Lifecycle: <state>`. No
+transitions, worker supervision, or CUDA changes exist yet.
+
+Increment 2 adds the command/endpoint surface without behavior:
+`POST /admin/model/load`, `POST /admin/model/unload`, and
+`POST /admin/model/switch` live under `/admin/`, separate from `/v1/*`,
+so they carry no OpenAI-compatible stability guarantee. For a
+well-formed request, each returns HTTP `501` with a fixed JSON body
+built from `lifecycle_not_implemented_response()` and never touches
+`lifecycle_state`, the engine, or CUDA. `load` and `switch` bind a
+required `ModelLifecycleRequest` body (`model_id: str`); a missing or
+malformed body fails FastAPI request validation before the handler
+runs and returns the standard `422` instead of the `501` stub.
+`unload` takes no body and always returns `501`. `./backend model
+load|unload|switch` call these endpoints, print the `detail` message,
+and exit non-zero.
+
+Real load/unload/switch behavior, worker supervision, and CUDA cleanup
+are Increment 3+ work per `docs/model-lifecycle-design.md`.

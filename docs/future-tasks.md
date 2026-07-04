@@ -43,12 +43,15 @@
   `OpenAICompatibleEngine` support belongs inside Nemoclaw Backend.
 - Do not add Ollama, vLLM, llama.cpp, OpenAI-compatible provider clients, or any
   other new engine until an explicit implementation phase asks for it.
-- Runtime model switching and model lifecycle commands remain future work.
-- Use `docs/model-lifecycle-design.md` as the Phase 5 design reference before
-  implementing `backend model load`, `backend model unload`, or `backend model
-  switch`.
+- The `/admin/model/load|unload|switch` endpoint surface and the matching
+  `backend model load|unload|switch` CLI commands exist (Phase 5 Increment 2)
+  but are stubs: every call returns HTTP `501` (or `422` for `load`/`switch`
+  if the request body fails validation) and never changes runtime state.
+  Real lifecycle behavior — actual load/unload/switch, worker supervision,
+  and CUDA cleanup — remains future work per
+  `docs/model-lifecycle-design.md` (Increment 3+).
 - Future `backend model load`, `backend model unload`, and `backend model switch`
-  commands should build on `ModelManager` without moving inference logic into it.
+  behavior should build on `ModelManager` without moving inference logic into it.
 - Implement real concurrent benchmark execution when needed. Phase 4 accepts
   `--concurrency` but still runs requests sequentially.
 - Implement first-token latency only after streaming responses exist.
