@@ -86,6 +86,9 @@ No breaking changes to `/v1/*` without explicit approval. Preserve
   providers unless explicitly requested.
 - Every implementation phase needs tests; existing tests must keep passing.
 - Update `README.md` and relevant `docs/` files with each phase.
+- At the end of every phase, update `README.md`, relevant `docs/`, and the
+  Current State section of this file. Do not let `AGENTS.md` drift from the
+  code.
 - Risky phases involving runtime state, GPU memory, process management, or
   active requests need a design document in `docs/` before implementation.
 - Never fake unavailable functionality. Report it clearly, as
@@ -94,6 +97,9 @@ No breaking changes to `/v1/*` without explicit approval. Preserve
   human-maintained direct runtime dependencies only.
 
 ## Current State
+
+This section must be updated at the end of every phase so agent guidance stays
+aligned with the code.
 
 Completed through Phase 4:
 
