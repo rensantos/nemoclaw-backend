@@ -87,6 +87,12 @@ Keep these endpoints OpenAI-compatible:
 No breaking changes to `/v1/*` without explicit approval. Preserve
 `uvicorn server:app --host 127.0.0.1 --port 8000` compatibility.
 
+## Versioning
+The project is pre-1.0. Minor bumps mark backend capabilities or architecture
+milestones. Patch bumps mark fixes, hardening, or docs. Do not break `/v1/*`
+without explicit architectural approval. Tags should mark validated runtime
+milestones, not merely passing tests.
+
 ## Engineering Rules
 
 - Keep code modular, testable, explicit, and production-quality.
