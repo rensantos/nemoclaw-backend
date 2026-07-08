@@ -35,7 +35,32 @@ class InferenceService:
         return self.engine.generate_text(prompt, max_new_tokens, temperature)
 
 
-def create_inference_service():
-    from engines.transformers_engine import TransformersEngine
+def _build_engine(config):
+    """Construct the InferenceEngine selected by config.backend.engine.
 
-    return InferenceService(TransformersEngine(settings))
+    config.py's load_config() already validates backend.engine against
+    VALID_ENGINES at startup, so only "transformers" or "ollama" are ever
+    seen here in practice; the final branch is a fail-fast guard for
+    direct callers, not a silent fallback.
+    """
+    engine_name = config.backend.engine
+
+    if engine_name == "transformers":
+        from engines.transformers_engine import TransformersEngine
+
+        return TransformersEngine(config)
+
+    if engine_name == "ollama":
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(config)
+
+    raise ValueError(
+        "Unknown backend.engine '{}'; valid values: transformers, ollama".format(
+            engine_name
+        )
+    )
+
+
+def create_inference_service():
+    return InferenceService(_build_engine(settings))

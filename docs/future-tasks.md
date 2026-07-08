@@ -60,11 +60,19 @@
 
 ## OllamaEngine Implementation (per docs/ollama-engine-design.md)
 
-- Increment 1: config (`backend.engine`, default `transformers`, `ENGINE`
-  env override) + engine factory branching in
-  `services/inference.create_inference_service()` + `OllamaEngine`
-  skeleton. Unit tests for config precedence and engine selection.
-- Increment 2: `OllamaEngine` read paths — `health()`, `list_models()`,
+- Increment 1 (done): config (`backend.engine`, default `transformers`,
+  `ENGINE` env override, fail-fast on invalid values) + `services/inference.
+  _build_engine()` factory called from `create_inference_service()` +
+  `engines/ollama_engine.py` skeleton (`load_model()` is a safe no-op so
+  startup doesn't crash; every other method raises `NotImplementedError`).
+  Unit tests: `tests/test_config.py` (precedence, invalid-value fail-fast),
+  `tests/test_engine_factory.py` (factory selection, stub construction and
+  behavior). `engine: transformers` (default) behavior is unchanged.
+  Operator validation still needed on UBI (Step 7): `./backend restart &&
+  ./backend status` and a live chat completion should be unchanged;
+  `ENGINE=ollama` startup should construct cleanly and fail requests with
+  `NotImplementedError`-derived errors, not hang or crash the process.
+- Increment 2 (next): `OllamaEngine` read paths — `health()`, `list_models()`,
   `load_model()` (tag-presence validation, no pulling). Unit tests with
   mocked Ollama HTTP responses; live validation on UBI with a small pulled
   model.

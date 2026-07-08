@@ -12,6 +12,7 @@ DEFAULTS = {
         "host": "127.0.0.1",
         "port": 8000,
         "gpu": 0,
+        "engine": "transformers",
     },
     "model": {
         "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
@@ -20,12 +21,15 @@ DEFAULTS = {
     },
 }
 
+VALID_ENGINES = ("transformers", "ollama")
+
 
 @dataclass(frozen=True)
 class BackendConfig:
     host: str
     port: int
     gpu: str
+    engine: str
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,13 @@ def load_config() -> Config:
     host = _env_value("HOST", _section_value(raw_config, "backend", "host"))
     port = _int_env("PORT", _section_value(raw_config, "backend", "port"))
     gpu = str(_env_value("GPU", _section_value(raw_config, "backend", "gpu")))
+    engine = _env_value("ENGINE", _section_value(raw_config, "backend", "engine"))
+    if engine not in VALID_ENGINES:
+        raise ValueError(
+            "Invalid backend.engine '{}'; valid values: {}".format(
+                engine, ", ".join(VALID_ENGINES)
+            )
+        )
     model_id = _env_value("MODEL_ID", _section_value(raw_config, "model", "id"))
     max_tokens_default = _int_env(
         "MAX_TOKENS_DEFAULT",
@@ -123,7 +134,7 @@ def load_config() -> Config:
     )
 
     return Config(
-        backend=BackendConfig(host=host, port=port, gpu=gpu),
+        backend=BackendConfig(host=host, port=port, gpu=gpu, engine=engine),
         model=ModelConfig(
             id=model_id,
             max_tokens_default=max_tokens_default,
@@ -171,4 +182,5 @@ if __name__ == "__main__":
     print("Host: {}".format(config.backend.host))
     print("Port: {}".format(config.backend.port))
     print("GPU: {}".format(config.backend.gpu))
+    print("Engine: {}".format(config.backend.engine))
     print("Model: {}".format(config.model.id))

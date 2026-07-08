@@ -105,8 +105,21 @@ Hugging Face Transformers causal language model on the UBI machine.
   model-listing semantics (`/v1/models` lists only the currently servable
   model, raw Ollama tags as ids, no namespacing) for all engines, keeps one
   engine active per backend instance for this phase, and maps each
-  `InferenceEngine` method to the Ollama daemon's HTTP API. No `OllamaEngine`
-  code exists yet.
+  `InferenceEngine` method to the Ollama daemon's HTTP API.
+- OllamaEngine Increment 1 (config + engine factory, no Ollama HTTP logic
+  yet): `config.yaml`'s `backend.engine` (`transformers` | `ollama`,
+  default `transformers`) selects the active engine, with an `ENGINE` env
+  override; `config.py`'s `load_config()` fails fast with a clear error if
+  the value isn't one of the two. `services/inference.py`'s new
+  `_build_engine(config)` helper is the factory `create_inference_service()`
+  calls to construct the selected engine, replacing the old unconditional
+  `TransformersEngine(settings)` construction. `engines/ollama_engine.py`
+  contains a skeleton `OllamaEngine`: `load_model()` is a safe no-op (so
+  `engine: ollama` starts up cleanly, since `InferenceService.__init__`
+  calls `load_model()` eagerly); every other method raises
+  `NotImplementedError` pointing at the design doc until later increments
+  implement it. With `engine: transformers` (the default), behavior is
+  unchanged from before this increment.
 
 ## Configuration
 

@@ -2,6 +2,9 @@ backend:
   host: 127.0.0.1
   port: 8000
   gpu: 0
+  # Which InferenceEngine implementation serves requests.
+  # Valid values: transformers | ollama (see docs/ollama-engine-design.md)
+  engine: transformers
 
 model:
   id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
