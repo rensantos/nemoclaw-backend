@@ -190,7 +190,8 @@ When current state is `unloaded`:
 - New chat requests during `loading`: reject with HTTP `503 Service Unavailable`.
 - Response body should keep the OpenAI-compatible error shape if an error
   schema exists by then; otherwise use the current FastAPI error style.
-- `/health` reports `status: loading`, `ready: false`, `model: <model_id>`.
+- `/health` reports `status: "unavailable"` (with `lifecycle_state:
+  "loading"`), `ready: false`, `model: <model_id>`.
 - `/v1/models` continues to report configured models and may include the
   selected/default model. It must not falsely claim the loading model is ready.
 
@@ -211,8 +212,8 @@ When current state is `ready`:
   timeout.
 - New chat requests during `unloading`: reject with HTTP `503 Service
   Unavailable`.
-- `/health` reports `status: unloading`, `ready: false`, and the model being
-  unloaded.
+- `/health` reports `status: "unavailable"` (with `lifecycle_state:
+  "unloading"`), `ready: false`, and the model being unloaded.
 - `/v1/models` still reports configured models; loaded runtime state is reported
   through health/status, not by removing configured models.
 
@@ -235,8 +236,8 @@ Switch is a single transition from one ready model to another.
   Unavailable`.
 - Requests are not queued. Queuing hides latency spikes and can produce
   surprising responses from either the old or new model.
-- `/health` reports `status: switching`, `ready: false`, `from_model`, and
-  `to_model`.
+- `/health` reports `status: "unavailable"` (with `lifecycle_state:
+  "switching"`), `ready: false`, `from_model`, and `to_model`.
 - `/v1/models` reports configured models. It should not represent the target
   model as loaded until the worker is ready.
 
