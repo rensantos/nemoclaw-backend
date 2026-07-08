@@ -58,6 +58,25 @@
 - GPU selection, multi-GPU scheduling, MIG support, CUDA affinity, and
   monitoring dashboards remain future work.
 
+## Core / application integration
+
+- All Nemoclaw applications (existing Research Assistant, future synthetic
+  data generation, assistants, Telegram interface, CLI tools) consume the
+  backend exclusively through the OpenAI-compatible surface. No
+  per-application endpoints in the backend.
+- Validate backend interoperability by migrating the existing Research
+  Assistant without modifying its reasoning logic — only its model access
+  layer (expected: base_url/config change on an OpenAI-style client). If the
+  migration requires rewriting any RAG pipeline logic, treat that as
+  evidence the Backend API is missing something; report the gap against the
+  pinned contract rather than working around it.
+- Remove any remaining direct model-loading or direct runtime calls from
+  migrated applications, per: Core never talks directly to inference
+  runtimes.
+- Use the migrated Research Assistant as an end-to-end validation workload
+  when OllamaEngine lands: same queries, switch engine in config, compare
+  behavior.
+
 ## Speculative / unscheduled
 
 - Possible future engines: TensorRTEngine (NVIDIA-optimized inference),

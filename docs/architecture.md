@@ -28,6 +28,20 @@ Core should call the backend API for inference, model listing, model selection
 state, benchmarking, and runtime inspection. It should not duplicate model
 provider, model-listing, benchmarking, or GPU/runtime logic.
 
+Multiple Nemoclaw applications consume the backend this way, not Core alone:
+the existing Research Assistant (RAG over local files/papers plus
+web-research commands) is the first planned client, with future synthetic
+data generation, other AI assistants, a Telegram interface, and CLI tools
+expected to follow. Each consumes the backend exclusively through its API;
+none require backend changes.
+
+Nemoclaw Backend is application-agnostic. It knows nothing about research,
+RAG, agents, memory, planning, Telegram, or any other application domain. Its
+sole responsibility is providing a stable, engine-independent inference
+platform. Paired with `docs/api-contract.md`'s "Core never talks directly to
+inference runtimes" rule, these two principles seal the boundary from both
+directions: applications above, runtimes below.
+
 ## Roadmap
 
 Agreed engine/feature order: `OllamaEngine` -> real model lifecycle
