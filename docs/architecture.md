@@ -28,6 +28,12 @@ Core should call the backend API for inference, model listing, model selection
 state, benchmarking, and runtime inspection. It should not duplicate model
 provider, model-listing, benchmarking, or GPU/runtime logic.
 
+## Roadmap
+
+Agreed engine/feature order: `OllamaEngine` -> real model lifecycle
+(app-factory refactor as step 0) -> SSE streaming (explicit `"stream": true`
+contract) -> `MonitorService` -> multi-model/multi-GPU support.
+
 ## Layers
 
 ```text
@@ -73,6 +79,17 @@ This API is the boundary Nemoclaw Core should use. Core should not import
 backend internals or reimplement backend-owned capabilities such as model
 listing, benchmarking, provider selection, or GPU inspection.
 
+### Admin surface vs spec
+
+The Nemoclaw system spec (v1, §6.5) describes flat control endpoints:
+`POST /models/load`, `POST /models/unload`, `POST /engines/switch`. The
+implementation instead adopts `POST /admin/model/load`, `POST
+/admin/model/unload`, and `POST /admin/model/switch` under an `/admin/`
+namespace. This `/admin/*` contract supersedes the spec §6.5 flat paths. The
+rationale: admin operations are unstable and evolving (currently stub `501`
+responses), and grouping them under `/admin/` keeps that instability clearly
+separated from the stable, OpenAI-compatible `/v1/*` surface.
+
 ## Inference Service
 
 `services/inference.py` contains `InferenceService`, the application boundary
@@ -104,13 +121,19 @@ service through `InferenceEngine` implementations, not in Nemoclaw Core.
 - `generate_text`
 
 The interface is intentionally small. Future engines such as `OllamaEngine`,
-`VLLMEngine`, `LlamaCppEngine`, `OpenAICompatibleEngine`, `TensorRTEngine`, or
-`ONNXEngine` should implement this contract without requiring changes to
-`api.py` or Nemoclaw Core.
+`VLLMEngine`, `LlamaCppEngine`, and `OpenAICompatibleEngine` should implement
+this contract without requiring changes to `api.py` or Nemoclaw Core.
 
 Future provider support belongs in Nemoclaw Backend. Core should select or ask
 for configured backend capabilities through the backend API rather than
 embedding provider-specific clients or model catalogs.
+
+The spec (§4.1) additionally lists `generate`, `chat`, `embed`, `stream`,
+`health`, `benchmark`, and `capabilities` as part of the engine contract. The
+interface grows incrementally as features land: `stream()` arrives with the
+streaming phase, `capabilities()` arrives with discovery. Methods must not be
+stubbed onto the interface ahead of their phase. `embed()` and `benchmark()`
+remain unscheduled.
 
 ## Transformers Engine
 

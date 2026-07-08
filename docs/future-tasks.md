@@ -58,6 +58,12 @@
 - GPU selection, multi-GPU scheduling, MIG support, CUDA affinity, and
   monitoring dashboards remain future work.
 
+## Speculative / unscheduled
+
+- Possible future engines: TensorRTEngine (NVIDIA-optimized inference),
+  ONNXEngine (portable CPU/edge inference). Not on roadmap; behind
+  `InferenceEngine` if ever added.
+
 ## Testing Follow-up
 
 - Add lightweight unit tests for config precedence:

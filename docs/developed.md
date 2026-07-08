@@ -91,6 +91,10 @@ Hugging Face Transformers causal language model on the UBI machine.
   `501` stub. `unload` takes no body and always returns `501`.
 - `backend model load|unload|switch` call those endpoints, print the
   `detail` message, and exit non-zero. No timeout/wait/progress logic yet.
+- The `/admin/model/*` namespace is the adopted contract for control
+  operations, superseding the Nemoclaw system spec's flat `/models/load`,
+  `/models/unload`, `/engines/switch` paths (spec §6.5), to keep unstable
+  admin operations separate from the stable `/v1/*` surface.
 
 ## Configuration
 
