@@ -74,14 +74,15 @@
   `NotImplementedError`-derived errors, not hang or crash the process.
 - Increment 2 (next): `OllamaEngine` read paths — `health()`, `list_models()`,
   `load_model()` (tag-presence validation, no pulling). Unit tests with
-  mocked Ollama HTTP responses; live validation on UBI with a small pulled
-  model.
+  mocked Ollama HTTP responses; live validation on the Ollama-hosting Local
+  Node (`docs/architecture.md`'s Target deployment topology — not UBI,
+  which runs `TransformersEngine`) with a small pulled model.
 - Increment 3: `OllamaEngine` `chat()` / `generate_text()`, including the
   model-resolution decision (404 `model_not_found` on mismatch,
   `EngineUnavailableError` -> `503` on daemon-down) and token-usage mapping
   (`prompt_eval_count`/`eval_count`, with the documented `0`-fallback and
   warning log when counts are missing). Unit tests with mocked responses;
-  live validation on UBI via `curl /v1/chat/completions`.
+  live validation on the Local Node via `curl /v1/chat/completions`.
 - Increment 4: `OllamaEngine.unload_model()` (`keep_alive: 0` mapping),
   tested as an engine method only — not wired to any live endpoint.
 - Increment 5 (separate, code-adjacent): the `openapi/backend-node.openapi.yaml`
@@ -95,13 +96,33 @@
   `OllamaEngine` increments — this is a separate future task so that
   closing a documented drift item on the existing engine doesn't expand an
   engine-integration increment into a behavior change for current callers.
-- Operator prerequisite: install Ollama on the UBI machine before
-  Increment 2's live validation; verify with `ollama --version`,
-  `ollama list`, and `curl http://127.0.0.1:11434/api/tags`. Verify Ubuntu
-  18 / glibc compatibility with the current Ollama release before
-  installing (see Risks in `docs/ollama-engine-design.md`).
+- Operator prerequisite: install Ollama on the Local Node (not UBI, which
+  runs `TransformersEngine` only — see `docs/architecture.md`'s Target
+  deployment topology) before Increment 2's live validation; verify with
+  `ollama --version`, `ollama list`, and `curl
+  http://127.0.0.1:11434/api/tags` on that node. Verify OS/glibc
+  compatibility with the current Ollama release for the Local Node's OS
+  before installing (see Risks in `docs/ollama-engine-design.md` — the
+  Ubuntu 18/glibc note there is marked not applicable to UBI now that
+  Ollama runs on the Local Node instead).
 - Backend Registry (`docs/registration-schema.json`) is deferred until a
-  real second backend instance exists (e.g. laptop node).
+  real second Backend Node exists (e.g. the Local Node). At Registry
+  design time, the registration schema may need amendment — e.g.
+  advertising the enabled engine and hardware traits per node;
+  `docs/registration-schema.json` remains authoritative and unchanged
+  until that phase.
+
+## OpenAICompatibleEngine / Remote API Node (future)
+
+- Per the target deployment topology (`docs/architecture.md`), the Remote
+  API Node runs `OpenAICompatibleEngine`, adapting remote OpenAI-compatible
+  services (OpenAI, Gemini, future compatible providers) into the Backend
+  contract so Core sees a Backend Node, not individual providers.
+- API keys must never be stored in `config/config.yaml` (committed to
+  git). Keys come from environment variables or an untracked secrets
+  file, consistent with the existing env-override pattern. Engine phase
+  contract applies: `__init__` side-effect free; `load_model()` =
+  lightweight key/endpoint validation; `health()` = API reachability.
 
 ## Core / application integration
 

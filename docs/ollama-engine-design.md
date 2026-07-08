@@ -416,9 +416,11 @@ Implement the `GET /api/tags`-based reachability/tag-presence checks.
 style already used for `BenchmarkService`'s HTTP calls in
 `tests/test_benchmark_service.py`) covering: daemon reachable + tag
 present, daemon reachable + tag absent (startup error), daemon
-unreachable. *Live validation on UBI:* install Ollama, `ollama pull` a
-small model, point `config.yaml` at it, run `./backend health` and confirm
-the reported fields.
+unreachable. *Live validation on the Ollama-hosting Local Node* (see
+`docs/architecture.md`'s Target deployment topology — not UBI, which runs
+`TransformersEngine`): install Ollama, `ollama pull` a small model, point
+`config.yaml` at it, run `./backend health` and confirm the reported
+fields.
 
 **Increment 3 — `chat()` / `generate_text()`.**
 Implement the `/api/chat` and `/api/generate` mappings, Section 1's
@@ -427,10 +429,10 @@ model-resolution decision (reject-with-404, `EngineUnavailableError` ->
 and warning log for missing counts).
 *Test strategy:* unit tests mocking Ollama JSON responses: happy path,
 missing `prompt_eval_count`/`eval_count`, model-id mismatch (expect the 404
-shape), daemon unreachable mid-call (expect 503). *Live validation on UBI:*
-start the backend against the pulled model, `curl /v1/chat/completions`
-with the correct and an incorrect model id, confirm token accounting and
-the 404 behavior.
+shape), daemon unreachable mid-call (expect 503). *Live validation on the
+Local Node:* start the backend against the pulled model, `curl
+/v1/chat/completions` with the correct and an incorrect model id, confirm
+token accounting and the 404 behavior.
 
 **Increment 4 — `unload_model()` mapping.**
 Implement the `keep_alive: 0` request. Not wired to any live endpoint
@@ -446,12 +448,16 @@ status-value widening) in the *same* code increment that introduces the
 behavior, per the `AGENTS.md` rule — not bundled into Increments 1-4, and
 not part of this design document.
 
-### Operator prerequisite: Ollama on UBI
+### Operator prerequisite: Ollama on the Local Node
 
-Ollama installation on the UBI machine is an operator action, not something
-this backend or its CLI automates (consistent with Non-goal: no
-pulling/downloading via the backend, extended here to installation itself).
-Manual verification commands before Increment 2's live validation:
+This section originally named UBI as the Ollama host; per the target
+deployment topology (`docs/architecture.md`), Ollama runs on the separate
+Local Node instead — UBI runs `TransformersEngine` only. Ollama
+installation on the Local Node is an operator action, not something this
+backend or its CLI automates (consistent with Non-goal: no
+pulling/downloading via the backend, extended here to installation
+itself). Manual verification commands before Increment 2's live
+validation, run on the Local Node:
 
 ```bash
 ollama --version
@@ -459,26 +465,41 @@ ollama list
 curl http://127.0.0.1:11434/api/tags
 ```
 
+Bringing up `OllamaEngine` this way stands up a second live Backend Node
+— an early, concrete step toward the multi-node topology and the
+condition (a real second node) that triggers the future Backend Registry
+work.
+
 ## 7. Risks and open questions
 
-- **Ubuntu 18 compatibility.** The UBI machine runs Ubuntu 18 (per
-  `AGENTS.md`, Environment). Current Ollama installer/release requirements
-  (glibc version, kernel features) have not been verified against Ubuntu
-  18.04's glibc 2.27. This must be checked on the actual UBI machine before
-  Increment 2 begins. If incompatible, fallback options are limited: no
-  containerization workaround is available without an explicit exception,
-  since `AGENTS.md` and `docs/developed.md`'s Compatibility section both
+- **Ubuntu 18 compatibility — NOT APPLICABLE.** This design predates the
+  target deployment topology decision (`docs/architecture.md`) and
+  originally assumed Ollama would run on the UBI machine. It does not:
+  Ollama runs on the separate Local Node, and UBI runs `TransformersEngine`
+  only. Retained for history, the original risk was: the UBI machine runs
+  Ubuntu 18 (per `AGENTS.md`, Environment), and current Ollama
+  installer/release requirements (glibc version, kernel features) had not
+  been verified against Ubuntu 18.04's glibc 2.27. The equivalent
+  OS/glibc compatibility question now applies to whatever OS the Local
+  Node runs, and must be checked there before Increment 2 begins. If
+  incompatible, fallback options are limited: no containerization
+  workaround is available without an explicit exception, since
+  `AGENTS.md` and `docs/developed.md`'s Compatibility section both
   disallow introducing Docker. Building Ollama from source or using an
   older release are the remaining options if the current release doesn't
-  run.
-- **VRAM contention on the single RTX A4000 (16GB).** Section 3 keeps one
-  engine active per backend *instance*, but nothing prevents an operator
-  from running a Transformers-serving instance and an Ollama-serving
-  instance side by side on the same physical GPU. Their combined VRAM
-  footprint is a deployment-level risk this design does not solve;
-  operators should not co-locate both without explicit VRAM budget
-  planning until GPU selection/multi-GPU scheduling (later roadmap item)
-  exists.
+  run on the Local Node's OS.
+- **VRAM contention on the Ollama-hosting Local Node (if it has a GPU).**
+  This design originally framed this risk as Transformers and Ollama
+  sharing the single UBI RTX A4000; per the target deployment topology,
+  Ollama runs on the separate Local Node, so that specific framing no
+  longer applies to the UBI GPU. The equivalent risk still applies wherever
+  Ollama actually runs: Section 3 keeps one engine active per Backend Node,
+  but nothing prevents the Local Node from also running other GPU-heavy
+  processes sharing the same physical GPU (if it has one). Their combined
+  VRAM footprint is a deployment-level risk this design does not solve;
+  operators should not co-locate GPU-heavy processes on the Local Node
+  without explicit VRAM budget planning until GPU selection/multi-GPU
+  scheduling (later roadmap item) exists.
 - **Chat templating differences.** Ollama applies its own model-specific
   template (from the Modelfile / GGUF metadata), which is not guaranteed to
   match the HF tokenizer's `apply_chat_template` output

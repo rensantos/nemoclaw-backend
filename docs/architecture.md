@@ -81,6 +81,40 @@ CLI
     -> ModelManager / GPUManager
 ```
 
+## Target deployment topology
+
+Terminology: **Backend System** is this codebase/platform. A **Backend
+Node** (equivalently, **Backend Instance**) is one deployed, running copy
+of it, configured with exactly one active **Engine** via `backend.engine`.
+An **Engine** is the pluggable runtime adapter a node runs. "The backend"
+alone is ambiguous and should be avoided in docs where precision matters.
+
+Three Backend Nodes are targeted:
+
+- **UBI Node** (`ubi-a4000`, RTX A4000, Ubuntu 18) -> `TransformersEngine`.
+- **Local Node** -> `OllamaEngine`. Ollama is not deployed on the UBI Node.
+- **Remote API Node** -> `OpenAICompatibleEngine` -> OpenAI / Gemini /
+  future compatible providers. This engine adapts remote OpenAI-compatible
+  services into the Backend contract, so Core sees a Backend Node, not
+  individual providers.
+
+Engines belong to the Backend codebase but are enabled only in Backend
+Nodes configured to use them.
+
+Every Backend Node runs exactly one active engine. Multi-engine dispatch
+is a future Backend capability and is intentionally deferred. (Ratified in
+`docs/ollama-engine-design.md` Section 3.)
+
+Every node exposes the identical pinned contract
+(`openapi/backend-node.openapi.yaml`). Core reaches remote providers only
+through the Remote API Node, never directly — consistent with "Core never
+talks directly to inference runtimes" (`docs/api-contract.md`).
+
+Node self-description (e.g. which engine is enabled, hardware traits) may
+be useful for the future Backend Registry; if so, that is a candidate
+amendment to `docs/registration-schema.json` at Registry design time —
+not made here.
+
 ## API Layer
 
 `api.py` owns HTTP routing and OpenAI-compatible response formatting.
