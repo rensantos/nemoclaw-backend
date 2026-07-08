@@ -87,6 +87,12 @@ Keep these endpoints OpenAI-compatible:
 No breaking changes to `/v1/*` without explicit approval. Preserve
 `uvicorn server:app --host 127.0.0.1 --port 8000` compatibility.
 
+`openapi/backend-node.openapi.yaml` is the authoritative API contract. Any
+endpoint addition or change (new route, changed request/response shape,
+changed status code, changed `x-implementation-status`) must update that
+file in the same increment. See `docs/api-contract.md` for the contract's
+tier model and stability rules.
+
 ## Versioning
 The project is pre-1.0. Minor bumps mark backend capabilities or architecture
 milestones. Patch bumps mark fixes, hardening, or docs. Do not break `/v1/*`
@@ -180,4 +186,5 @@ python3 -m unittest discover -s tests
 ```
 
 Useful docs: `docs/architecture.md`, `docs/developed.md`,
-`docs/future-tasks.md`, `docs/problems.md`, `docs/model-lifecycle-design.md`.
+`docs/future-tasks.md`, `docs/problems.md`, `docs/model-lifecycle-design.md`,
+`docs/api-contract.md`, `openapi/backend-node.openapi.yaml`.

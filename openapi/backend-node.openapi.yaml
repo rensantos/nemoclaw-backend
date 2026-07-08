@@ -1,0 +1,840 @@
+openapi: 3.1.0
+info:
+  title: Nemoclaw Backend Node API
+  version: "1.0.0"
+  description: |
+    Authoritative API contract for one Nemoclaw Backend instance (a "backend
+    node"). This is the single source of truth for what a backend node
+    exposes today and what is committed for future increments.
+
+    Two tiers:
+
+    - **Tier 1 — OpenAI-compatible surface** (`/v1/*`): interoperability with
+      any OpenAI-compatible client. Stable once implemented; no breaking
+      changes without explicit architectural approval (see AGENTS.md).
+    - **Tier 2 — Native management surface**: Nemoclaw-specific power
+      (health, lifecycle, admin, discovery, observability). Stability varies
+      by endpoint; see each endpoint's `x-implementation-status` and
+      description.
+
+    Every path in this document carries an `x-implementation-status` of one
+    of: `implemented`, `partial`, `stub`, `planned`, `unscheduled`. See
+    docs/api-contract.md for the legend and the architectural rules this
+    contract enforces.
+  x-decision-records:
+    - "The /admin/model/* namespace is the adopted control-plane contract; it
+       supersedes the Nemoclaw system spec's flat /models/load,
+       /models/unload, /engines/switch paths (spec §6.5). See commit
+       61526a9 and docs/architecture.md."
+    - "GET /lifecycle (planned) is read-only observability/status only. It
+       performs no transitions. /admin/model/* remains the authoritative
+       lifecycle CONTROL surface."
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: Single backend instance (default local deployment; host/port
+      are configurable per docs/architecture.md Model Configuration).
+
+tags:
+  - name: openai-compatible
+    description: Tier 1 — OpenAI-compatible surface. Stable contract.
+  - name: native-management
+    description: Tier 2 — Native Nemoclaw management surface.
+
+paths:
+  # ---------------------------------------------------------------------
+  # Tier 1 — OpenAI-compatible surface
+  # ---------------------------------------------------------------------
+  /v1/chat/completions:
+    post:
+      tags: [openai-compatible]
+      summary: Create a chat completion
+      operationId: createChatCompletion
+      x-implementation-status: partial
+      x-current-behavior: |
+        Non-streaming chat completion is implemented end to end against the
+        configured engine (currently TransformersEngine).
+
+        "stream" is accepted by the request schema but is NOT implemented:
+        if "stream": true, the handler immediately raises HTTP 400 with
+        {"detail": "Streaming is not supported"} before any inference runs.
+        The target contract (once the streaming phase lands) is
+        Server-Sent Events per OpenAI convention when "stream": true.
+
+        The response "model" field currently echoes the request's "model"
+        (or the configured default if omitted) as a label. It does NOT
+        select which model actually serves the request — there is exactly
+        one loaded model per backend instance, chosen at process startup.
+        A client requesting a "model" other than the loaded one still gets
+        served by the loaded model, labeled with the requested id.
+      description: |
+        Implemented for non-streaming requests. Streaming ("stream": true)
+        is contractually defined as SSE per OpenAI convention but returns
+        HTTP 400 today; see x-current-behavior.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: Chat completion (non-streaming only, today).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+        "400":
+          description: |
+            Either "stream": true (not supported yet) or an empty
+            "messages" array.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
+        "422":
+          description: Request body failed schema validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+
+  /v1/models:
+    get:
+      tags: [openai-compatible]
+      summary: List available models
+      operationId: listModels
+      x-implementation-status: implemented
+      description: |
+        The authoritative model-listing endpoint. There is NO separate
+        native /models endpoint — do not add one; Core and adapters must
+        use this endpoint for model discovery.
+
+        Current behavior: returns exactly one entry describing the model
+        loaded at process startup (id, created timestamp, owned_by
+        "local"). It does not enumerate every model configured in
+        config/config.yaml's model.available list.
+      responses:
+        "200":
+          description: OpenAI-compatible model list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelListResponse"
+
+  /v1/completions:
+    post:
+      tags: [openai-compatible]
+      summary: Create a legacy-style text completion
+      operationId: createCompletion
+      x-implementation-status: planned
+      description: |
+        Planned. Target contract: OpenAI-compatible text completion
+        (prompt in, choices with generated text out). Not implemented;
+        calling this endpoint today returns 404 (no route registered).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletionRequest"
+      responses:
+        "200":
+          description: Text completion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompletionResponse"
+
+  /v1/embeddings:
+    post:
+      tags: [openai-compatible]
+      summary: Create embeddings
+      operationId: createEmbeddings
+      x-implementation-status: unscheduled
+      description: |
+        Planned but unscheduled. No engine (InferenceEngine) currently
+        defines an embed() method and none is on the near-term roadmap
+        (see docs/architecture.md Engine Interface section). Calling this
+        endpoint today returns 404 (no route registered).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingRequest"
+      responses:
+        "200":
+          description: Embedding vectors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingResponse"
+
+  # ---------------------------------------------------------------------
+  # Tier 2 — Native management surface
+  # ---------------------------------------------------------------------
+  /health:
+    get:
+      tags: [native-management]
+      summary: Backend health and runtime status
+      operationId: getHealth
+      x-implementation-status: implemented
+      description: |
+        Returns engine health merged with the backend's lifecycle state.
+        "gpu" is a single GPU name string (or null), not the richer
+        multi-GPU detail GPUManager can produce — see the planned /gpu
+        endpoint for that.
+      responses:
+        "200":
+          description: Health status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /lifecycle:
+    get:
+      tags: [native-management]
+      summary: Read-only lifecycle status
+      operationId: getLifecycle
+      x-implementation-status: planned
+      description: |
+        OBSERVABILITY/STATUS ONLY. Returns the current LifecycleState and
+        related read-only metadata. It performs no transitions.
+
+        Decision record: /admin/model/* remains the authoritative
+        lifecycle CONTROL surface (see commit 61526a9); /lifecycle is
+        read-only and must never gain load/unload/switch side effects.
+        Not implemented today; calling this endpoint returns 404.
+      responses:
+        "200":
+          description: Current lifecycle status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleStatusResponse"
+
+  /admin/model/load:
+    post:
+      tags: [native-management]
+      summary: Load a model (stub)
+      operationId: adminModelLoad
+      x-implementation-status: stub
+      description: |
+        Stub. The /admin/* namespace carries NO stability guarantee.
+
+        Current semantics: a well-formed request (valid
+        ModelLifecycleRequest body) always returns HTTP 501 with the fixed
+        JSON body produced by lifecycle_not_implemented_response(). It
+        never changes lifecycle_state and never touches the engine or
+        CUDA. A missing or malformed body fails FastAPI request validation
+        first and returns the standard 422, not the 501 stub.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelLifecycleRequest"
+      responses:
+        "501":
+          description: Not implemented (fixed stub body).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleStubResponse"
+        "422":
+          description: Missing or malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+
+  /admin/model/unload:
+    post:
+      tags: [native-management]
+      summary: Unload the current model (stub)
+      operationId: adminModelUnload
+      x-implementation-status: stub
+      description: |
+        Stub. The /admin/* namespace carries NO stability guarantee.
+
+        Current semantics: takes no request body. Always returns HTTP 501
+        with the fixed JSON body produced by
+        lifecycle_not_implemented_response(). Never changes
+        lifecycle_state and never touches the engine or CUDA.
+      responses:
+        "501":
+          description: Not implemented (fixed stub body).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleStubResponse"
+
+  /admin/model/switch:
+    post:
+      tags: [native-management]
+      summary: Switch to a different model (stub)
+      operationId: adminModelSwitch
+      x-implementation-status: stub
+      description: |
+        Stub. The /admin/* namespace carries NO stability guarantee.
+
+        Current semantics: a well-formed request (valid
+        ModelLifecycleRequest body) always returns HTTP 501 with the fixed
+        JSON body produced by lifecycle_not_implemented_response(). It
+        never changes lifecycle_state and never touches the engine or
+        CUDA. A missing or malformed body fails FastAPI request validation
+        first and returns the standard 422, not the 501 stub.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelLifecycleRequest"
+      responses:
+        "501":
+          description: Not implemented (fixed stub body).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleStubResponse"
+        "422":
+          description: Missing or malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+
+  /capabilities:
+    get:
+      tags: [native-management]
+      summary: Engine capability discovery
+      operationId: getCapabilities
+      x-implementation-status: planned
+      description: |
+        Planned discovery endpoint so Core and adapters can code against a
+        stable shape ahead of implementation. Mirrors the growth policy in
+        docs/architecture.md's Engine Interface section: reports which
+        InferenceEngine methods the loaded engine currently supports.
+        Not implemented today; calling this endpoint returns 404.
+      responses:
+        "200":
+          description: Engine capability summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+
+  /engines:
+    get:
+      tags: [native-management]
+      summary: List configured/available engines
+      operationId: listEngines
+      x-implementation-status: planned
+      description: |
+        Planned. Target contract: enumerate the engine(s) this backend
+        instance can run (today, exactly one: TransformersEngine), each
+        with an id, type, and status. Not implemented today; calling this
+        endpoint returns 404.
+      responses:
+        "200":
+          description: Engine list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnginesResponse"
+
+  /metrics:
+    get:
+      tags: [native-management]
+      summary: Observability metrics
+      operationId: getMetrics
+      x-implementation-status: planned
+      description: |
+        Planned. No metrics collection exists yet (Phase 4 explicitly does
+        not implement Prometheus/Grafana per docs/architecture.md). This
+        schema defines the minimal shape for future MonitorService output.
+        Not implemented today; calling this endpoint returns 404.
+      responses:
+        "200":
+          description: Point-in-time metrics snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+
+  /gpu:
+    get:
+      tags: [native-management]
+      summary: Current GPU status
+      operationId: getGpu
+      x-implementation-status: planned
+      description: |
+        Planned HTTP surface for the GPU status already computed by
+        services/gpu.py's GPUManager.current() for the CLI
+        (`backend gpu current`). Schema mirrors CurrentGPUInfo exactly so
+        no fields are invented ahead of implementation. Not implemented
+        today; calling this endpoint returns 404.
+      responses:
+        "200":
+          description: Current GPU status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GpuStatusResponse"
+
+  /benchmarks:
+    get:
+      tags: [native-management]
+      summary: Available benchmark types and their status
+      operationId: listBenchmarks
+      x-implementation-status: planned
+      description: |
+        Planned. Reflects the benchmark types services/benchmark.py's
+        BenchmarkService already implements for the CLI (latency,
+        throughput, vram, first-token-latency), reporting availability —
+        first-token-latency is unavailable until streaming exists. This
+        endpoint does not execute benchmarks or store results; it only
+        reports what is available. Not implemented today; calling this
+        endpoint returns 404.
+      responses:
+        "200":
+          description: Benchmark availability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BenchmarksResponse"
+
+  /generate:
+    post:
+      tags: [native-management]
+      summary: Legacy text generation (compatibility endpoint)
+      operationId: generateLegacy
+      x-implementation-status: implemented
+      deprecated: true
+      description: |
+        Implemented legacy compatibility endpoint predating the
+        OpenAI-compatible surface. Deprecated: prefer
+        POST /v1/chat/completions. Kept only for old local callers per
+        docs/architecture.md's Compatibility section.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateRequest"
+      responses:
+        "200":
+          description: Generated text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateResponse"
+
+components:
+  schemas:
+    # --- Tier 1 schemas -------------------------------------------------
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+
+    ChatCompletionRequest:
+      type: object
+      required: [messages]
+      properties:
+        model:
+          type: [string, "null"]
+          description: >-
+            Optional. Echoed back as a label in the response; does not
+            select which loaded model serves the request (single model per
+            backend instance).
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+          description: >-
+            Must contain at least one message. An empty array is accepted
+            by the JSON schema but rejected at runtime with HTTP 400
+            ("messages must not be empty").
+        max_tokens:
+          type: [integer, "null"]
+        temperature:
+          type: [number, "null"]
+        stream:
+          type: boolean
+          default: false
+          description: >-
+            Contract: SSE per OpenAI convention when true. Current
+            behavior: HTTP 400 when true (see x-current-behavior on the
+            operation).
+
+    ChatCompletionResponse:
+      type: object
+      required: [id, object, created, model, choices, usage]
+      properties:
+        id:
+          type: string
+          example: "chatcmpl-3f9a1b2c4d5e6f7a8b9c0d1e2f3a4b5c"
+        object:
+          type: string
+          const: chat.completion
+        created:
+          type: integer
+          description: Unix epoch seconds.
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, message, finish_reason]
+            properties:
+              index:
+                type: integer
+                const: 0
+              message:
+                type: object
+                required: [role, content]
+                properties:
+                  role:
+                    type: string
+                    const: assistant
+                  content:
+                    type: string
+              finish_reason:
+                type: string
+                const: stop
+                description: >-
+                  Always "stop" today; no other finish reasons are
+                  produced (no length/content-filter distinction yet).
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    Usage:
+      type: object
+      required: [prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    ModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelObject"
+
+    ModelObject:
+      type: object
+      required: [id, object, created, owned_by]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: model
+        created:
+          type: integer
+        owned_by:
+          type: string
+          const: local
+
+    CompletionRequest:
+      type: object
+      required: [prompt]
+      properties:
+        model:
+          type: [string, "null"]
+        prompt:
+          type: string
+        max_tokens:
+          type: [integer, "null"]
+        temperature:
+          type: [number, "null"]
+
+    CompletionResponse:
+      type: object
+      required: [id, object, created, model, choices]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: text_completion
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              text:
+                type: string
+              finish_reason:
+                type: string
+
+    EmbeddingRequest:
+      type: object
+      required: [input]
+      properties:
+        model:
+          type: [string, "null"]
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+
+    EmbeddingResponse:
+      type: object
+      required: [object, data, model]
+      properties:
+        object:
+          type: string
+          const: list
+        model:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object:
+                type: string
+                const: embedding
+              index:
+                type: integer
+              embedding:
+                type: array
+                items:
+                  type: number
+
+    # --- Tier 2 schemas ---------------------------------------------------
+    LifecycleState:
+      type: string
+      enum: [unloaded, loading, ready, unloading, switching, degraded]
+      description: See services/lifecycle.py and docs/model-lifecycle-design.md.
+
+    HealthResponse:
+      type: object
+      required: [status, model, cuda, gpu, lifecycle_state]
+      properties:
+        status:
+          type: string
+          const: ok
+        model:
+          type: string
+        cuda:
+          type: boolean
+        gpu:
+          type: [string, "null"]
+          description: Single GPU device name, or null if CUDA is unavailable.
+        lifecycle_state:
+          $ref: "#/components/schemas/LifecycleState"
+
+    LifecycleStatusResponse:
+      type: object
+      required: [lifecycle_state]
+      properties:
+        lifecycle_state:
+          $ref: "#/components/schemas/LifecycleState"
+        model:
+          type: [string, "null"]
+          description: Currently loaded model id, if any.
+
+    ModelLifecycleRequest:
+      type: object
+      required: [model_id]
+      properties:
+        model_id:
+          type: string
+
+    LifecycleStubResponse:
+      type: object
+      required: [error, detail, lifecycle_state]
+      properties:
+        error:
+          type: string
+          const: not_implemented
+        detail:
+          type: string
+          const: "Model lifecycle operations are not implemented yet."
+        lifecycle_state:
+          $ref: "#/components/schemas/LifecycleState"
+
+    CapabilitiesResponse:
+      type: object
+      required: [engine, features]
+      properties:
+        engine:
+          type: string
+          example: transformers
+        features:
+          type: object
+          description: >-
+            Reflects InferenceEngine methods; grows per
+            docs/architecture.md's Engine Interface growth policy.
+          properties:
+            chat:
+              type: boolean
+            generate_text:
+              type: boolean
+            stream:
+              type: boolean
+            embed:
+              type: boolean
+            benchmark:
+              type: boolean
+
+    EnginesResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, type, status]
+            properties:
+              id:
+                type: string
+              type:
+                type: string
+                example: transformers
+              status:
+                $ref: "#/components/schemas/LifecycleState"
+
+    MetricsResponse:
+      type: object
+      description: Minimal shape; no metrics collection exists yet.
+      properties:
+        requests_total:
+          type: integer
+        tokens_total:
+          type: integer
+        uptime_seconds:
+          type: number
+
+    GpuStatusResponse:
+      type: object
+      description: Mirrors services/gpu.py CurrentGPUInfo exactly.
+      required:
+        - selected_cuda_device
+        - backend_gpu
+        - current_model
+        - cuda_available
+        - torch_current_device
+        - driver_version
+      properties:
+        selected_cuda_device:
+          type: string
+        backend_gpu:
+          type: string
+        current_model:
+          type: string
+        available_memory_mib:
+          type: [integer, "null"]
+        cuda_available:
+          type: boolean
+        torch_current_device:
+          type: string
+        driver_version:
+          type: string
+
+    BenchmarksResponse:
+      type: object
+      required: [benchmarks]
+      properties:
+        benchmarks:
+          type: array
+          items:
+            type: object
+            required: [name, available]
+            properties:
+              name:
+                type: string
+                enum: [latency, throughput, vram, first-token-latency]
+              available:
+                type: boolean
+              message:
+                type: string
+                description: >-
+                  Set for unavailable benchmarks, e.g. first-token-latency
+                  before streaming exists.
+
+    GenerateRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        max_new_tokens:
+          type: integer
+          description: Defaults to the configured model.max_tokens_default.
+        temperature:
+          type: number
+          description: Defaults to the configured model.temperature_default.
+
+    GenerateResponse:
+      type: object
+      required: [model, response]
+      properties:
+        model:
+          type: string
+        response:
+          type: string
+          description: >-
+            Full decoded output including the prompt (not prompt-stripped,
+            unlike /v1/chat/completions).
+
+    # --- Shared error schemas -------------------------------------------
+    SimpleErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+      description: FastAPI's default HTTPException body shape.
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
+      description: FastAPI's standard 422 validation error body shape.

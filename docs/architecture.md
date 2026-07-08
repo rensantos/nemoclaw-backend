@@ -79,6 +79,10 @@ This API is the boundary Nemoclaw Core should use. Core should not import
 backend internals or reimplement backend-owned capabilities such as model
 listing, benchmarking, provider selection, or GPU inspection.
 
+`openapi/backend-node.openapi.yaml` is the authoritative API contract for a
+backend instance; see `docs/api-contract.md` for the human-readable
+companion. Do not duplicate endpoint schemas here.
+
 ### Admin surface vs spec
 
 The Nemoclaw system spec (v1, §6.5) describes flat control endpoints:

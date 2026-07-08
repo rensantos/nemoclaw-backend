@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nemoclaw.internal/schemas/registration-schema.json",
+  "title": "Backend Node Registration",
+  "description": "FORWARD CONTRACT — nothing implements this yet. Defines the self-registration payload a Nemoclaw Backend instance will submit to the future Backend Registry, per the Nemoclaw system spec §7. No Registry, no registration client, and no registration endpoint exist in this repo today. This schema exists so the Registry and backend instances can be built against the same shape when that phase begins.",
+  "type": "object",
+  "required": [
+    "backend_id",
+    "endpoint_url",
+    "capabilities",
+    "health_status",
+    "priority_score",
+    "region",
+    "latency_profile"
+  ],
+  "properties": {
+    "backend_id": {
+      "type": "string",
+      "description": "Stable unique identifier for this backend instance."
+    },
+    "endpoint_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the backend instance's API (the server documented in openapi/backend-node.openapi.yaml)."
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Mirrors the future GET /capabilities response shape (see openapi/backend-node.openapi.yaml CapabilitiesResponse). Not implemented yet.",
+      "properties": {
+        "engine": {
+          "type": "string",
+          "example": "transformers"
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "chat": { "type": "boolean" },
+            "generate_text": { "type": "boolean" },
+            "stream": { "type": "boolean" },
+            "embed": { "type": "boolean" },
+            "benchmark": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Model ids this backend instance can serve."
+        }
+      },
+      "additionalProperties": false
+    },
+    "health_status": {
+      "type": "string",
+      "enum": ["ok", "degraded", "unreachable"],
+      "description": "Registry-facing summary derived from GET /health and lifecycle_state."
+    },
+    "priority_score": {
+      "type": "number",
+      "description": "Registry-assigned or self-reported routing priority. Scale and computation are not yet defined; placeholder numeric field per spec §7."
+    },
+    "region": {
+      "type": "string",
+      "description": "Deployment region/locality identifier for routing decisions."
+    },
+    "latency_profile": {
+      "type": "object",
+      "description": "Observed or advertised latency characteristics. Shape is provisional pending the MonitorService/benchmark-history design.",
+      "properties": {
+        "p50_ms": { "type": "number" },
+        "p95_ms": { "type": "number" },
+        "measured_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

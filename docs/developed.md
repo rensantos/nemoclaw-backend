@@ -95,6 +95,10 @@ Hugging Face Transformers causal language model on the UBI machine.
   operations, superseding the Nemoclaw system spec's flat `/models/load`,
   `/models/unload`, `/engines/switch` paths (spec §6.5), to keep unstable
   admin operations separate from the stable `/v1/*` surface.
+- The authoritative API contract is pinned in
+  `openapi/backend-node.openapi.yaml` (OpenAPI 3.1), with a human-readable
+  companion in `docs/api-contract.md` and a forward contract for Backend
+  Registry self-registration in `docs/registration-schema.json`.
 
 ## Configuration
 
