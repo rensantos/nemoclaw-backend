@@ -179,12 +179,24 @@ paths:
       tags: [native-management]
       summary: Backend health and runtime status
       operationId: getHealth
-      x-implementation-status: implemented
+      x-implementation-status: partial
+      x-current-behavior: |
+        Today's only implementation (TransformersEngine, always-ready
+        lifecycle) ever returns "status": "ok" — there is no code path
+        that produces "degraded" or "unavailable" yet. The
+        ok/degraded/unavailable enum on HealthResponse.status is the
+        target contract; real "degraded"/"unavailable" reporting arrives
+        with OllamaEngine health handling (see
+        docs/ollama-engine-design.md). This widens the pinned contract to
+        resolve the gap reported in commit 1078a46: "status" was
+        previously pinned as const "ok" with no way to report a
+        daemon-down or not-yet-servable runtime.
       description: |
         Returns engine health merged with the backend's lifecycle state.
-        "gpu" is a single GPU name string (or null), not the richer
-        multi-GPU detail GPUManager can produce — see the planned /gpu
-        endpoint for that.
+        "status" is a pure projection of "lifecycle_state" (see
+        HealthResponse), not an independent truth source. "gpu" is a
+        single GPU name string (or null), not the richer multi-GPU detail
+        GPUManager can produce — see the planned /gpu endpoint for that.
       responses:
         "200":
           description: Health status.
@@ -641,7 +653,21 @@ components:
       properties:
         status:
           type: string
-          const: ok
+          enum: [ok, degraded, unavailable]
+          description: |
+            Pure projection of lifecycle_state — not an independent truth
+            source. Exact mapping (see services/lifecycle.py for
+            LifecycleState, the source of truth for state names):
+            - lifecycle_state "ready" -> "ok": engine runtime healthy,
+              requests servable.
+            - lifecycle_state "degraded" -> "degraded": backend process
+              alive but engine runtime impaired (e.g. Ollama daemon
+              unreachable, unrecoverable engine error); inference requests
+              are expected to fail.
+            - lifecycle_state "unloaded", "loading", "unloading",
+              "switching" -> "unavailable": backend responds but no
+              engine is currently servable (e.g. model unloaded or
+              mid-transition).
         model:
           type: string
         cuda:

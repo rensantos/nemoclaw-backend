@@ -94,10 +94,28 @@ worker restart strategy.
 | --- | --- |
 | `unloaded` | `loading` |
 | `loading` | `ready`, `degraded` |
-| `ready` | `unloading`, `switching` |
+| `ready` | `unloading`, `switching`, `degraded` |
 | `unloading` | `unloaded`, `degraded` |
 | `switching` | `ready`, `degraded` |
 | `degraded` | `loading`, `unloaded` |
+
+`ready -> degraded` is triggered by an unexpected runtime failure while
+serving — an engine daemon crash (for example, an Ollama daemon becoming
+unreachable mid-request) or an unrecoverable CUDA/worker error — with no
+admin-initiated `unload`/`switch` in progress. This is distinct from the
+existing `unloading -> degraded` and `switching -> degraded` edges, which
+cover a failed admin-initiated transition; `ready -> degraded` covers a
+failure with no transition underway. Recovery uses the same existing
+`degraded` edges already in the table — `degraded -> loading` (an explicit
+reload attempt) or `degraded -> unloaded` (give up and report unloaded) — no
+new states or edges are introduced for recovery.
+
+This closes a known gap: the table previously had no `ready -> degraded`
+edge even though an unexpected crash while serving is exactly that
+transition. The gap was re-surfaced while designing `OllamaEngine`
+(`docs/ollama-engine-design.md`, commit `1078a46`), whose daemon-owned
+model loading makes a mid-request daemon crash a realistic failure mode
+this state machine must represent.
 
 This table is descriptive of the state machine the Minimal Implementation Plan
 below will implement. Increment 1 (current) only introduces the state values

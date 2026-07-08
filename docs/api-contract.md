@@ -66,6 +66,15 @@ Both surfaces touch lifecycle state, so the split is deliberate:
 Do not add write/transition semantics to `/lifecycle`. Do not add a second
 read-only status endpoint under `/admin/`.
 
+## `/health` status semantics
+
+`status` in `/health` is a pure projection of `lifecycle_state`, not an
+independent signal: `ready` -> `ok`, `degraded` -> `degraded`, and every
+other lifecycle state (`unloaded`, `loading`, `unloading`, `switching`) ->
+`unavailable`. See `openapi/backend-node.openapi.yaml`'s `HealthResponse`
+schema for the full enum; today's only implementation (TransformersEngine)
+always reports `"ok"` — see that schema's `x-current-behavior`.
+
 ## `x-implementation-status` legend
 
 Every path in `openapi/backend-node.openapi.yaml` carries one of:
