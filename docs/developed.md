@@ -99,6 +99,14 @@ Hugging Face Transformers causal language model on the UBI machine.
   `openapi/backend-node.openapi.yaml` (OpenAPI 3.1), with a human-readable
   companion in `docs/api-contract.md` and a forward contract for Backend
   Registry self-registration in `docs/registration-schema.json`.
+- `docs/ollama-engine-design.md` is the design document for `OllamaEngine`.
+  It decides model-resolution semantics (reject unservable models with a
+  404 `model_not_found`, response `"model"` always the served model) and
+  model-listing semantics (`/v1/models` lists only the currently servable
+  model, raw Ollama tags as ids, no namespacing) for all engines, keeps one
+  engine active per backend instance for this phase, and maps each
+  `InferenceEngine` method to the Ollama daemon's HTTP API. No `OllamaEngine`
+  code exists yet.
 
 ## Configuration
 

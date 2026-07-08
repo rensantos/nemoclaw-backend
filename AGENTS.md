@@ -187,4 +187,5 @@ python3 -m unittest discover -s tests
 
 Useful docs: `docs/architecture.md`, `docs/developed.md`,
 `docs/future-tasks.md`, `docs/problems.md`, `docs/model-lifecycle-design.md`,
-`docs/api-contract.md`, `openapi/backend-node.openapi.yaml`.
+`docs/ollama-engine-design.md`, `docs/api-contract.md`,
+`openapi/backend-node.openapi.yaml`.

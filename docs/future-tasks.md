@@ -58,6 +58,43 @@
 - GPU selection, multi-GPU scheduling, MIG support, CUDA affinity, and
   monitoring dashboards remain future work.
 
+## OllamaEngine Implementation (per docs/ollama-engine-design.md)
+
+- Increment 1: config (`backend.engine`, default `transformers`, `ENGINE`
+  env override) + engine factory branching in
+  `services/inference.create_inference_service()` + `OllamaEngine`
+  skeleton. Unit tests for config precedence and engine selection.
+- Increment 2: `OllamaEngine` read paths — `health()`, `list_models()`,
+  `load_model()` (tag-presence validation, no pulling). Unit tests with
+  mocked Ollama HTTP responses; live validation on UBI with a small pulled
+  model.
+- Increment 3: `OllamaEngine` `chat()` / `generate_text()`, including the
+  model-resolution decision (404 `model_not_found` on mismatch,
+  `EngineUnavailableError` -> `503` on daemon-down) and token-usage mapping
+  (`prompt_eval_count`/`eval_count`, with the documented `0`-fallback and
+  warning log when counts are missing). Unit tests with mocked responses;
+  live validation on UBI via `curl /v1/chat/completions`.
+- Increment 4: `OllamaEngine.unload_model()` (`keep_alive: 0` mapping),
+  tested as an engine method only — not wired to any live endpoint.
+- Increment 5 (separate, code-adjacent): the `openapi/backend-node.openapi.yaml`
+  amendments this design requires (new `model_not_found` error schema,
+  optional `requested_model` field, `/health` status-value widening for
+  daemon-down reporting) must land in the same increment as the runtime
+  behavior that needs them, not bundled into Increments 1-4.
+- Apply the model-resolution decision (`docs/ollama-engine-design.md`
+  Section 1) to the existing `TransformersEngine`/`api.py`
+  `/v1/chat/completions` path. Deliberately deferred out of the
+  `OllamaEngine` increments — this is a separate future task so that
+  closing a documented drift item on the existing engine doesn't expand an
+  engine-integration increment into a behavior change for current callers.
+- Operator prerequisite: install Ollama on the UBI machine before
+  Increment 2's live validation; verify with `ollama --version`,
+  `ollama list`, and `curl http://127.0.0.1:11434/api/tags`. Verify Ubuntu
+  18 / glibc compatibility with the current Ollama release before
+  installing (see Risks in `docs/ollama-engine-design.md`).
+- Backend Registry (`docs/registration-schema.json`) is deferred until a
+  real second backend instance exists (e.g. laptop node).
+
 ## Core / application integration
 
 - All Nemoclaw applications (existing Research Assistant, future synthetic
@@ -76,6 +113,10 @@
 - Use the migrated Research Assistant as an end-to-end validation workload
   when OllamaEngine lands: same queries, switch engine in config, compare
   behavior.
+- Research Assistant migration is an early contract-validation task after
+  OllamaEngine if its current workflows do not require SSE streaming. If
+  streaming is required for meaningful validation, defer migration until
+  after the SSE streaming phase.
 
 ## Speculative / unscheduled
 
