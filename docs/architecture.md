@@ -153,6 +153,26 @@ streaming phase, `capabilities()` arrives with discovery. Methods must not be
 stubbed onto the interface ahead of their phase. `embed()` and `benchmark()`
 remain unscheduled.
 
+### Engine phase contract
+
+Alongside the method list, every `InferenceEngine` implementation follows
+the same three-phase contract for *when* work happens:
+
+- `__init__`: MUST be side-effect free construction — no I/O, no network,
+  no CUDA, no daemon contact. Constructing an engine object must never
+  fail for runtime-environment reasons.
+- `load_model()`: the designated home for initialization; MAY be heavy
+  (`TransformersEngine` loads weights into VRAM here). Engines whose
+  runtime is owned by an external daemon (e.g. `OllamaEngine`) SHOULD keep
+  it to lightweight validation or a no-op — the daemon owns the heavy
+  work.
+- `health()`: owns runtime validation; must be safe to call at any time
+  and must never mutate engine state.
+
+This contract was made explicit by OllamaEngine Increment 1 (commit
+`4e75042`) and retroactively describes `TransformersEngine`'s existing
+behavior — no code change implied.
+
 ## Transformers Engine
 
 `engines/transformers_engine.py` contains all Hugging Face Transformers,
