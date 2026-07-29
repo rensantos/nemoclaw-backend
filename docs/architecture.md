@@ -98,6 +98,18 @@ Three Backend Nodes are targeted:
   services into the Backend contract, so Core sees a Backend Node, not
   individual providers.
 
+Physical placement: the UBI Node is the only Backend Node reached over the
+network from wherever Core/the frontend runs — it lives on the RTX A4000
+box, remote to everything else. The Local Node and the Remote API Node are
+both intended to run on the same machine as Core/the frontend itself, not
+on UBI and not on a separate third machine. This is why OllamaEngine and
+OpenAICompatibleEngine live-validation happens on that machine, not on
+UBI. Core/the frontend stays model-agnostic either way — it delivers a
+prompt to whichever node/model it is configured to target; that
+node+model selection is, at least initially, a manual Core/frontend-side
+configuration choice (base_url + model id), not runtime logic this
+Backend System performs on its own.
+
 Engines belong to the Backend codebase but are enabled only in Backend
 Nodes configured to use them.
 
