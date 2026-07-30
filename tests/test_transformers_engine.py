@@ -4,7 +4,7 @@ from unittest import mock
 import torch
 
 from config import BackendConfig, Config, ModelConfig
-from engines.transformers_engine import TransformersEngine
+from engines.transformers_engine import TransformersEngine, scan_local_cache
 
 
 def _make_config(quantization="none", model_id="test-model"):
@@ -79,6 +79,32 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
             engine.load_model()
 
         self.assertEqual(mocked_model.call_count, 1)
+
+
+class ScanLocalCacheTests(unittest.TestCase):
+    """Read-only local HF cache discovery, independent of config.yaml."""
+
+    def test_returns_repo_id_keyed_dict_for_model_repos_only(self):
+        model_repo = mock.Mock(repo_id="TinyLlama/TinyLlama-1.1B-Chat-v1.0", repo_type="model")
+        dataset_repo = mock.Mock(repo_id="some/dataset", repo_type="dataset")
+        fake_cache_info = mock.Mock(repos=[model_repo, dataset_repo])
+
+        with mock.patch("huggingface_hub.scan_cache_dir", return_value=fake_cache_info):
+            result = scan_local_cache()
+
+        self.assertEqual(set(result.keys()), {"TinyLlama/TinyLlama-1.1B-Chat-v1.0"})
+        self.assertIs(result["TinyLlama/TinyLlama-1.1B-Chat-v1.0"], model_repo)
+
+    def test_returns_empty_dict_when_no_cache_directory_exists(self):
+        from huggingface_hub.errors import CacheNotFound
+
+        with mock.patch(
+            "huggingface_hub.scan_cache_dir",
+            side_effect=CacheNotFound("no cache", cache_dir="/nonexistent"),
+        ):
+            result = scan_local_cache()
+
+        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":

@@ -197,7 +197,25 @@ Hugging Face Transformers causal language model on the UBI machine.
   GPU, or `bitsandbytes` install required to run them. Live validation on
   UBI (real `bitsandbytes` install, real model load, `/health`,
   `/v1/chat/completions`) is a follow-up, not done as part of writing this
-  code.
+  code. `config/config.yaml` was subsequently updated: `model.id`/
+  `model.available` point at `google/gemma-4-26B-A4B-it` (Gemma 4 26B
+  MoE, 4-bit — ~13GB weights, real headroom on the RTX A4000's 16GB)
+  instead of the TinyLlama placeholder.
+- Local model cache discovery: new `engines.transformers_engine.
+  scan_local_cache()` does a read-only scan of the local Hugging Face
+  cache via `huggingface_hub.scan_cache_dir()` (new explicit dependency,
+  was already transitive via `transformers`) — the counterpart to
+  `OllamaEngine`'s `GET /api/tags` verification, since
+  `TransformersEngine` had none: `config.yaml`'s `model.available` is a
+  static catalog never checked against what's actually on disk.
+  `./backend model list|current|info` now print `Cached locally: yes
+  (<size>) / no` per entry (skipped gracefully, not shown as "no", when
+  torch/transformers aren't installed at all — e.g. an Ollama-only Local
+  Node). New `./backend model local` command lists every model repo
+  actually cached, including ones not in `config.yaml`, flagging which.
+  Read-only: nothing here downloads, deletes, or rewrites `config.yaml` —
+  a mismatch (something configured but not cached, or cached but not
+  configured) is surfaced for a human to act on, not auto-corrected.
 
 ## Configuration
 

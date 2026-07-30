@@ -186,13 +186,22 @@
   value. First-ever `TransformersEngine` unit tests
   (`tests/test_transformers_engine.py`), mocking `from_pretrained()` —
   no GPU or `bitsandbytes` install needed to run them.
-- Follow-up (not done): live validation on UBI — install `bitsandbytes`
-  in the `llm` conda env, pick a real model that benefits from
-  quantization (something in the 13-14B class was the motivating case,
-  to make real use of the RTX A4000's 16GB beyond the ~7B fp16 ceiling),
-  set `model.id`/`model.quantization` in `config/config.yaml`, confirm
-  `./backend start`, `/health`, and a real `/v1/chat/completions` call
-  all work.
+- Follow-up (not done): live validation on UBI. `model.id`/
+  `model.quantization` in `config/config.yaml` are already set
+  (`google/gemma-4-26B-A4B-it`, `4bit` — ~13GB weights, real headroom on
+  the RTX A4000's 16GB). Still needed: install `bitsandbytes` in the
+  `llm` conda env (and likely `huggingface-cli login`, since Gemma
+  repos are typically gated), confirm `./backend start`, `/health`, and
+  a real `/v1/chat/completions` call all work. Gemma 4 is very new
+  (April 2026); its `transformers`/`bitsandbytes` MoE-quantization
+  compatibility is unverified until this first real load.
+- Done: local Hugging Face cache discovery
+  (`engines.transformers_engine.scan_local_cache()`,
+  `./backend model list|current|info`'s new `Cached locally:` line,
+  new `./backend model local` command). Read-only — surfaces drift
+  between `config.yaml`'s catalog and what's actually on disk, doesn't
+  auto-fix it. See `tests/test_transformers_engine.py`'s
+  `ScanLocalCacheTests`.
 
 - Per the target deployment topology (`docs/architecture.md`), the Remote
   API Node runs `OpenAICompatibleEngine`, adapting remote OpenAI-compatible

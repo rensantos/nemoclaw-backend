@@ -278,7 +278,20 @@ so UBI's RTX A4000 can serve a larger model than fp16 alone allows
 behavior. First-ever `TransformersEngine` unit tests added
 (`tests/test_transformers_engine.py`). Live validation on UBI (install
 `bitsandbytes`, pick and load a real quantized model) is a follow-up, not
-done yet.
+done yet. `config/config.yaml`'s `model.id`/`model.available` now point
+at `google/gemma-4-26B-A4B-it` (Gemma 4 26B MoE, 4-bit) instead of the
+TinyLlama placeholder.
+
+Local model cache discovery: new `engines.transformers_engine.
+scan_local_cache()` reads the local Hugging Face cache (read-only, never
+downloads/deletes) — the `TransformersEngine`-specific counterpart to
+`OllamaEngine`'s `GET /api/tags` check, since `config.yaml`'s
+`model.available` is a static human-maintained catalog never verified
+against reality. `./backend model list|current|info` now show `Cached
+locally: yes (<size>) / no` per entry; new `./backend model local` lists
+everything actually cached, including repos not in `config.yaml`. New
+`huggingface_hub` dependency (was already transitive via `transformers`).
+Discovery only — nothing auto-writes `config.yaml`.
 
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
@@ -293,6 +306,7 @@ Run real CLI commands inside the `llm` Conda environment:
 ```bash
 ./backend start|stop|restart|status|health|config|logs
 ./backend model list|current|use <model_id>|info <model_id>
+./backend model local   # what's actually cached on disk (TransformersEngine only)
 ./backend model load|unload|switch <model_id>   # stubs: 501 not implemented
 ./backend gpu list|current|monitor
 ./backend benchmark latency|throughput|vram|first-token-latency

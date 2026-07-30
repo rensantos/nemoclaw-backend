@@ -4,6 +4,7 @@ transformers
 torch
 accelerate
 bitsandbytes
+huggingface_hub
 sentencepiece
 jinja2
 PyYAML

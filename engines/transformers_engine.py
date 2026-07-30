@@ -31,6 +31,29 @@ def _quantization_load_kwargs(quantization: str) -> dict:
     return {"torch_dtype": torch.float16}
 
 
+def scan_local_cache() -> Dict[str, object]:
+    """Read-only scan of the local Hugging Face cache: which model repos
+    are actually downloaded on this machine right now.
+
+    Returns {repo_id: huggingface_hub.CachedRepoInfo}, model repos only.
+    Never downloads, deletes, or otherwise mutates the cache - purely
+    reports current local disk state, the TransformersEngine-specific
+    counterpart to OllamaEngine's GET /api/tags check
+    (docs/ollama-engine-design.md's "no config.yaml model.available
+    equivalent for Ollama" decision applies in reverse here: this is the
+    equivalent Transformers never had).
+    """
+    from huggingface_hub import scan_cache_dir
+    from huggingface_hub.errors import CacheNotFound
+
+    try:
+        cache_info = scan_cache_dir()
+    except CacheNotFound:
+        return {}
+
+    return {repo.repo_id: repo for repo in cache_info.repos if repo.repo_type == "model"}
+
+
 class TransformersEngine(InferenceEngine):
     """Hugging Face Transformers implementation of the inference engine."""
 

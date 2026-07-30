@@ -341,13 +341,34 @@ def _print_config() -> None:
     typer.echo("Temperature default: {}".format(config.model.temperature_default))
 
 
-def _display_model(model, current_id: str, detailed: bool = False) -> None:
+def _scan_local_cache():
+    """Wraps engines.transformers_engine.scan_local_cache().
+
+    Returns None (not {}) when torch/transformers aren't installed in
+    this environment (e.g. an Ollama-only Local Node) so callers can skip
+    the cache display line entirely instead of reporting a misleading
+    "no" for something that was never actually checked.
+    """
+    try:
+        from engines.transformers_engine import scan_local_cache
+    except ImportError:
+        return None
+    return scan_local_cache()
+
+
+def _display_model(model, current_id: str, detailed: bool = False, cache_lookup=None) -> None:
     marker = " (current)" if str(model["id"]) == current_id else ""
     typer.echo("Model: {}{}".format(model["id"], marker))
     typer.echo("  Name: {}".format(model.get("name", model["id"])))
     typer.echo("  Path: {}".format(model.get("path", model["id"])))
     typer.echo("  Engine: {}".format(model.get("engine", "transformers")))
     typer.echo("  Device: {}".format(model.get("device", "cuda")))
+    if cache_lookup is not None and model.get("engine", "transformers") == "transformers":
+        cached = cache_lookup.get(str(model["id"]))
+        if cached is not None:
+            typer.echo("  Cached locally: yes ({})".format(cached.size_on_disk_str))
+        else:
+            typer.echo("  Cached locally: no (first load will download from Hugging Face)")
 
     if detailed:
         if "gpu" in model:
@@ -614,10 +635,36 @@ def show_config():
 def model_list():
     """Show all configured models."""
     current_id = model_manager.selected_model_id()
+    cache_lookup = _scan_local_cache()
 
     typer.echo("Configured models")
     for model in model_manager.list_models():
-        _display_model(model, current_id)
+        _display_model(model, current_id, cache_lookup=cache_lookup)
+
+
+@model_app.command("local")
+def model_local():
+    """Show model repos actually present in the local Hugging Face cache.
+
+    Read-only: reports real disk state, independent of config.yaml's
+    model.available catalog. Never downloads or deletes anything.
+    """
+    cache_lookup = _scan_local_cache()
+    if cache_lookup is None:
+        typer.echo("torch/transformers are not installed in this environment;")
+        typer.echo("cannot scan the local Hugging Face cache here.")
+        raise typer.Exit(code=1)
+    if not cache_lookup:
+        typer.echo("No cached Hugging Face models found on this machine.")
+        return
+
+    configured_ids = {str(m["id"]) for m in model_manager.list_models()}
+    typer.echo("Locally cached Hugging Face models")
+    for repo_id, cached in sorted(cache_lookup.items()):
+        in_catalog = " (in config.yaml)" if repo_id in configured_ids else " (not in config.yaml)"
+        typer.echo("Model: {}{}".format(repo_id, in_catalog))
+        typer.echo("  Size on disk: {}".format(cached.size_on_disk_str))
+        typer.echo("  Last modified: {}".format(cached.last_modified_str))
 
 
 @model_app.command("current")
@@ -631,7 +678,7 @@ def model_current():
     except ValueError:
         typer.echo("Model is selected but not configured: {}".format(current_id))
         raise typer.Exit(code=1)
-    _display_model(model, current_id, detailed=True)
+    _display_model(model, current_id, detailed=True, cache_lookup=_scan_local_cache())
     typer.echo("Loaded model: determined by the running backend process")
 
 
@@ -673,7 +720,7 @@ def model_info(model_id: str):
         raise typer.Exit(code=1)
 
     typer.echo("Configured model info")
-    _display_model(model, current_id, detailed=True)
+    _display_model(model, current_id, detailed=True, cache_lookup=_scan_local_cache())
     typer.echo("Configured model: yes")
     typer.echo("Selected/default model: {}".format("yes" if model_id == current_id else "no"))
     typer.echo("Loaded model: determined by the running backend process")

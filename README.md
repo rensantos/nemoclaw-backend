@@ -143,6 +143,7 @@ Use the Python CLI for normal operations:
 ./backend config
 ./backend logs
 ./backend model list
+./backend model local
 ./backend model current
 ./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
@@ -211,10 +212,19 @@ The CLI delegates model metadata and selection work to `ModelManager` in
 model in YAML. It does not hot-switch the running backend. If the backend is
 already running, the CLI prints that a restart is required.
 
+`config/config.yaml`'s `model.available` catalog is static and human-maintained
+— nothing keeps it in sync with what's actually downloaded. `backend model
+list|current|info` show a `Cached locally: yes (<size>) / no` line per entry
+(TransformersEngine only, via a read-only Hugging Face cache scan); `backend
+model local` lists everything actually cached on disk, including models not
+in the catalog. This is discovery only — it never edits `config.yaml` or
+downloads/deletes anything.
+
 Examples:
 
 ```bash
 ./backend model list
+./backend model local
 ./backend model current
 ./backend model info TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ./backend model use TinyLlama/TinyLlama-1.1B-Chat-v1.0
