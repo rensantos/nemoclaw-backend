@@ -7,13 +7,18 @@ backend:
   engine: transformers
 
 model:
-  id: Qwen/Qwen3-8B
+  id: Qwen/Qwen3-1.7B
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
   # (see docs/quantization-design.md). Requires bitsandbytes installed.
-  quantization: 4bit
+  quantization: none
   available:
+    - id: Qwen/Qwen3-1.7B
+      name: Qwen3 1.7B (fp16)
+      path: Qwen/Qwen3-1.7B
+      engine: transformers
+      device: cuda
     - id: Qwen/Qwen3-8B
       name: Qwen3 8B (4-bit)
       path: Qwen/Qwen3-8B
