@@ -7,7 +7,7 @@ backend:
   engine: transformers
 
 model:
-  id: Qwen/Qwen3-1.7B
+  id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit

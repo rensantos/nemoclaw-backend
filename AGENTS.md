@@ -278,36 +278,36 @@ so UBI's RTX A4000 can serve a larger model than fp16 alone allows
 behavior. First-ever `TransformersEngine` unit tests added
 (`tests/test_transformers_engine.py`).
 
-Live validation on UBI is in progress (`docs/future-tasks.md` has the
-full detail). First attempt (`google/gemma-4-26B-A4B-it`, 4-bit) failed:
-UBI's `transformers` was too old for `GemmaTokenizer`, and even fixed,
-its ~52GB bf16 download wouldn't have fit UBI's real ~32GB free disk
-(908GB disk, 97% used, mostly other users' data this account can't
-clean up — quantization only shrinks VRAM at load time, not the
-download). `config/config.yaml`'s `model.id`/`model.available` now
-point at `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk
-and VRAM margin) instead.
-
-Two more real bugs found and fixed via this live validation, both in
-`docs/quantization-design.md`'s amendment log: (1) UBI's environment had
-a broken/mismatched `torchvision` (leftover, not a declared dependency)
-that crashed `transformers` 4.57.6's import chain — fixed by uninstalling
-it, since text-only inference never needed it. (2) `device_map="auto"`
-mis-sized a single-GPU 4-bit load against the model's *unquantized*
-footprint against real free VRAM (UBI has 4 GPUs shared with another
-user's concurrent training job) and tried to CPU-offload part of the
-model, which bitsandbytes refused — fixed by pinning
-`device_map={"": 0}` for single-GPU quantized loads specifically (new
-`_device_map()` helper, `engines/transformers_engine.py`). Still needed
-on UBI: retry `./backend restart` with this fix.
+Live validation on UBI is **done** for `engine: transformers` +
+`quantization: none`, after a long chain of real environment issues
+(`docs/problems.md` has the full postmortem — read it before running
+`pip install -U` on UBI again). In order: `google/gemma-4-26B-A4B-it`
+(4-bit) failed on an outdated `transformers` and, separately, wouldn't
+have fit UBI's real free disk (~32GB of a 908GB disk, 97% used by other
+users' data). Switched to `Qwen/Qwen3-8B` (4-bit) — hit a broken
+`torchvision` (fixed: uninstalled, unneeded), then a `device_map="auto"`
+bug mis-sizing quantized loads against unquantized footprint (fixed:
+new `_device_map()` in `engines/transformers_engine.py`, pins
+`device_map={"": 0}` for single-GPU quantized loads), then the real
+wall: UBI's driver (470.86, CUDA 11.4 max, no sudo to upgrade) cannot
+run `torch >= 2.1`, and `transformers >= 4.51` (needed for Qwen3)
+requires it — confirmed this isn't Qwen3-specific, since even `TinyLlama`
+hit the identical `torch.compiler` failure under `transformers` 4.51.
+Resolved by pinning `transformers==4.36.0` + `torch==2.0.1+cu117` (also
+needed `Pillow==9.0.1`, newer Pillow needs a `libstdc++` symbol Ubuntu 18
+doesn't have) — both now pinned in `requirements.txt` with comments.
+**Practical consequence:** UBI can only serve architectures
+`transformers` 4.36.0 already supported (confirmed: Llama family) — not
+Qwen3, not Gemma. `config/config.yaml` is back on
+`TinyLlama/TinyLlama-1.1B-Chat-v1.0`, `quantization: none`, confirmed
+live via `/health` and a real `/v1/chat/completions` call. Picking a
+better model for UBI now means picking a `transformers`-4.36-era
+architecture (e.g. Llama 2/3, Mistral), not just "recent and small
+enough" — check `docs/problems.md` before assuming a model will load.
 
 Discovered while investigating disk space: UBI actually has **4x RTX
-A4000** (64GB combined VRAM), not 1. Not yet used —
-`TransformersEngine` already calls `device_map="auto"`, so multi-GPU
-sharding may need only a `backend.gpu` config change (comma-separated
-indices instead of one); see `docs/future-tasks.md`'s Multi-GPU entry
-for the plan and `GPUManager` caveat. Deliberately sequenced after
-Qwen3-8B validates on a single GPU first.
+A4000** (64GB combined VRAM), not 1. Not yet used — see
+`docs/future-tasks.md`'s Multi-GPU entry.
 
 Local model cache discovery: new `engines.transformers_engine.
 scan_local_cache()` reads the local Hugging Face cache (read-only, never

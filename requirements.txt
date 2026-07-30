@@ -1,6 +1,11 @@
 fastapi
 uvicorn
-transformers
+# UBI's driver (470.86, CUDA 11.4 max, no sudo to upgrade) caps compatible
+# versions below what plain `pip install -U` would choose. See
+# docs/problems.md before touching these three. torch needs a special
+# index and isn't resolvable from this line alone:
+#   pip install torch==2.0.1+cu117 --index-url https://download.pytorch.org/whl/cu117
+transformers==4.36.0
 torch
 accelerate
 bitsandbytes
@@ -10,3 +15,7 @@ jinja2
 PyYAML
 pydantic
 typer
+# Newer Pillow (>=9.2) needs a libstdc++ symbol UBI's Ubuntu 18 doesn't
+# have (see docs/problems.md). Transitive via transformers; pinned here
+# so a plain `pip install -r requirements.txt` doesn't re-break it.
+Pillow==9.0.1

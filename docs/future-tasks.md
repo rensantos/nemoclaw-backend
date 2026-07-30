@@ -186,29 +186,36 @@
   value. First-ever `TransformersEngine` unit tests
   (`tests/test_transformers_engine.py`), mocking `from_pretrained()` —
   no GPU or `bitsandbytes` install needed to run them.
-- Follow-up (in progress): live validation on UBI. First attempt used
-  `google/gemma-4-26B-A4B-it` (4-bit) but hit two real blockers: UBI's
-  `transformers` was too old to recognize `GemmaTokenizer` at all (crash
-  confirmed in `logs/backend.log`), and the actual download (~52GB bf16 —
-  quantization only shrinks VRAM at load time, not the download) didn't
-  fit UBI's real free disk (~32GB of a 908GB disk, 97% used mostly by
-  other users' data in `/home` this account can't clean up). Switched to
-  `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk margin) —
-  more recent than Qwen2.5, well-established `transformers` support
-  unlike Gemma 4's brand-new MoE architecture. Two further real bugs hit
-  and fixed during this same live validation: a broken/mismatched
-  `torchvision` leftover in UBI's env crashed `transformers`' import
-  chain (fixed: uninstalled it, not a real dependency for text-only
-  inference); `device_map="auto"` mis-sized a single-GPU 4-bit load
-  against the model's unquantized footprint versus real free VRAM
-  (shared with another user's concurrent training job across all 4
-  GPUs) and tried to CPU-offload part of the model, which bitsandbytes
-  refused — fixed with a new `_device_map()` helper in
-  `engines/transformers_engine.py` that pins `device_map={"": 0}` for
-  single-GPU quantized loads specifically, with regression tests in
-  `tests/test_transformers_engine.py`. See `docs/quantization-design.md`'s
-  amendment log for full detail. Still needed: retry `./backend restart`
-  on UBI with this fix and confirm `/health`, `/v1/chat/completions`.
+- Done: live validation on UBI, for `engine: transformers` +
+  `quantization: none`. Long chain of real issues, full postmortem in
+  `docs/problems.md`: `google/gemma-4-26B-A4B-it` (4-bit) failed on an
+  outdated `transformers` and wouldn't have fit UBI's real free disk
+  (~32GB of a 908GB disk, 97% used by other users' data) even if fixed.
+  Switched to `Qwen/Qwen3-8B` (4-bit) — hit a broken `torchvision`
+  leftover crashing `transformers`' import chain (fixed: uninstalled,
+  unneeded for text-only inference), then a `device_map="auto"` bug
+  mis-sizing quantized loads against the model's *unquantized* footprint
+  versus real free VRAM (shared with another user's concurrent training
+  job across all 4 GPUs), which tried to CPU-offload part of the model
+  and got refused by bitsandbytes (fixed: new `_device_map()` helper in
+  `engines/transformers_engine.py`, pins `device_map={"": 0}` for
+  single-GPU quantized loads; regression tests in
+  `tests/test_transformers_engine.py`). Then the real wall: UBI's driver
+  (470.86, CUDA 11.4 max, no sudo) can't run `torch >= 2.1`, and
+  `transformers >= 4.51` (needed for Qwen3) requires it — confirmed not
+  Qwen3-specific, since `TinyLlama` hit the identical `torch.compiler`
+  failure under `transformers` 4.51 too. Resolved: pinned
+  `transformers==4.36.0` + `torch==2.0.1+cu117` (+ `Pillow==9.0.1` for an
+  unrelated `libstdc++` incompatibility), now recorded in
+  `requirements.txt` with comments. **Consequence**: UBI can only serve
+  architectures `transformers` 4.36.0 already supported (confirmed:
+  Llama family) — Qwen3 and Gemma are both off the table on this
+  hardware until the driver gets upgraded by someone with admin access.
+  `config/config.yaml` is back on `TinyLlama/TinyLlama-1.1B-Chat-v1.0`,
+  confirmed live via `/health` and a real `/v1/chat/completions` call.
+  Follow-up, not done: pick a better TinyLlama-replacement from a
+  `transformers`-4.36-era architecture (Llama 2/3, Mistral) sized for
+  the ~9.4GB actually free on GPU 0 (shared with another user's job).
 - Future: multi-GPU. UBI actually has **4x RTX A4000** (64GB combined
   VRAM), not 1 — discovered 2026-07-30, not yet used.
   `TransformersEngine.load_model()` already calls `device_map="auto"`

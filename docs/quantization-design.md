@@ -140,3 +140,12 @@ Live validation happens only on UBI, with `bitsandbytes` actually
 installed and a real model pulled: confirm `./backend start` with
 `MODEL_QUANTIZATION=4bit` loads successfully, `/health` still reports
 `cuda`/`gpu` correctly, and a real `/v1/chat/completions` call succeeds.
+
+**Further amendment (2026-07-30):** live validation on UBI surfaced a
+driver ceiling that blocks quantized *and* unquantized loading of any
+sufficiently recent model architecture (not specific to quantization) —
+full detail in `docs/problems.md`. UBI's `transformers`/`torch` are now
+pinned (`4.36.0`/`2.0.1+cu117`) below what `bitsandbytes`-quantized
+Qwen3/Gemma loading needs, so 4-bit/8-bit quantization is untested
+against a real model on UBI as of this amendment; `quantization: none`
+is what's actually confirmed live there today.
