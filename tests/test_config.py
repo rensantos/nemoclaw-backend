@@ -57,6 +57,32 @@ class ConfigEngineSelectionTests(unittest.TestCase):
 
         self.assertEqual(result.backend.ollama_host, "http://192.168.1.50:11434")
 
+    def test_quantization_defaults_to_none_when_unset(self):
+        result = self._load({})
+
+        self.assertEqual(result.model.quantization, "none")
+
+    def test_quantization_reads_yaml_value(self):
+        result = self._load({"model": {"quantization": "4bit"}})
+
+        self.assertEqual(result.model.quantization, "4bit")
+
+    def test_quantization_env_override_takes_precedence_over_yaml(self):
+        result = self._load(
+            {"model": {"quantization": "none"}},
+            env={"MODEL_QUANTIZATION": "8bit"},
+        )
+
+        self.assertEqual(result.model.quantization, "8bit")
+
+    def test_invalid_quantization_value_in_yaml_raises(self):
+        with self.assertRaises(ValueError):
+            self._load({"model": {"quantization": "2bit"}})
+
+    def test_invalid_quantization_env_override_raises(self):
+        with self.assertRaises(ValueError):
+            self._load({}, env={"MODEL_QUANTIZATION": "2bit"})
+
 
 if __name__ == "__main__":
     unittest.main()

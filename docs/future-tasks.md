@@ -168,7 +168,24 @@
   discover and choose among Backend Nodes" question the Registry exists
   to answer. Not started — recorded here as a real trigger, not a design.
 
-## OpenAICompatibleEngine / Remote API Node (future)
+## TransformersEngine Quantization (per docs/quantization-design.md)
+
+- Done: `model.quantization` config (`none`/`4bit`/`8bit`,
+  `MODEL_QUANTIZATION` env override, fail-fast on invalid values),
+  `bitsandbytes` added to `requirements.txt`, `TransformersEngine.
+  load_model()` branches to a `BitsAndBytesConfig` (NF4 + double quant for
+  `4bit`, plain `load_in_8bit` for `8bit`) instead of `torch_dtype=
+  torch.float16` for `none`. `./backend config` prints the configured
+  value. First-ever `TransformersEngine` unit tests
+  (`tests/test_transformers_engine.py`), mocking `from_pretrained()` —
+  no GPU or `bitsandbytes` install needed to run them.
+- Follow-up (not done): live validation on UBI — install `bitsandbytes`
+  in the `llm` conda env, pick a real model that benefits from
+  quantization (something in the 13-14B class was the motivating case,
+  to make real use of the RTX A4000's 16GB beyond the ~7B fp16 ceiling),
+  set `model.id`/`model.quantization` in `config/config.yaml`, confirm
+  `./backend start`, `/health`, and a real `/v1/chat/completions` call
+  all work.
 
 - Per the target deployment topology (`docs/architecture.md`), the Remote
   API Node runs `OpenAICompatibleEngine`, adapting remote OpenAI-compatible

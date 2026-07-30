@@ -3,10 +3,32 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.fx
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from config import Config
 from engines.base import InferenceEngine
+
+
+def _quantization_load_kwargs(quantization: str) -> dict:
+    """Maps model.quantization to AutoModelForCausalLM.from_pretrained()
+    kwargs (docs/quantization-design.md Section 3).
+
+    "none" keeps today's exact fp16 behavior. "4bit"/"8bit" pass a
+    BitsAndBytesConfig instead of torch_dtype - the quantization config's
+    own compute dtype governs precision, and passing both is redundant.
+    """
+    if quantization == "4bit":
+        return {
+            "quantization_config": BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+            )
+        }
+    if quantization == "8bit":
+        return {"quantization_config": BitsAndBytesConfig(load_in_8bit=True)}
+    return {"torch_dtype": torch.float16}
 
 
 class TransformersEngine(InferenceEngine):
@@ -22,12 +44,14 @@ class TransformersEngine(InferenceEngine):
         if self.model is not None and self.tokenizer is not None:
             return
 
-        print("Loading model: {}".format(self.model_id))
+        print("Loading model: {} (quantization={})".format(
+            self.model_id, self.config.model.quantization
+        ))
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
-            torch_dtype=torch.float16,
             device_map="auto",
+            **_quantization_load_kwargs(self.config.model.quantization),
         )
         self.model.eval()
 

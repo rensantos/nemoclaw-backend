@@ -263,14 +263,28 @@ Local Node):
 
 OllamaEngine implementation (Increments 1-4) is now complete: config
 selection, real read paths, real chat/generation, and best-effort unload,
-all live-validated against a real Ollama daemon and real models.
+all live-validated against a real Ollama daemon and real models. The
+user's frontend (`nemoclaw-research-assistant`) has since been migrated
+onto this backend's `/v1/chat/completions` via its `OpenAICompatibleProvider`
+and an SSH tunnel to the UBI Node (`ssh -L 8000:127.0.0.1:8000 ubi-a4000`,
+since the backend has no auth and binds `127.0.0.1` only) — confirmed
+live end to end.
+
+`TransformersEngine` quantized loading (`docs/quantization-design.md`):
+new `model.quantization` config (`none` default, `4bit`, `8bit` via
+`bitsandbytes`/`BitsAndBytesConfig`, `MODEL_QUANTIZATION` env override),
+so UBI's RTX A4000 can serve a larger model than fp16 alone allows
+(~7B was the prior practical ceiling). `none` is unchanged existing
+behavior. First-ever `TransformersEngine` unit tests added
+(`tests/test_transformers_engine.py`). Live validation on UBI (install
+`bitsandbytes`, pick and load a real quantized model) is a follow-up, not
+done yet.
 
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
-behavior, `docs/model-lifecycle-design.md`) is open. So is migrating an
-existing Nemoclaw application (e.g. the user's frontend, or the Research
-Assistant per `docs/future-tasks.md`) off calling Ollama directly and onto
-this backend's `/v1/chat/completions`, now that `OllamaEngine` can
-actually serve requests end to end.
+behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
+Registry (`docs/future-tasks.md`) — its trigger condition (a real second
+live Backend Node) is now met, motivated by the frontend wanting
+user-facing Local-vs-UBI model choice instead of a static `.env` restart.
 
 ## Commands
 

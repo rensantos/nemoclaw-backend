@@ -336,6 +336,7 @@ def _print_config() -> None:
     typer.echo("Port: {}".format(config.backend.port))
     typer.echo("GPU: {}".format(config.backend.gpu))
     typer.echo("Model: {}".format(config.model.id))
+    typer.echo("Quantization: {}".format(config.model.quantization))
     typer.echo("Max tokens default: {}".format(config.model.max_tokens_default))
     typer.echo("Temperature default: {}".format(config.model.temperature_default))
 

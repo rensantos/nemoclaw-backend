@@ -21,7 +21,9 @@ def _make_config(engine, ollama_host="http://127.0.0.1:11434", model_id="test-mo
             engine=engine,
             ollama_host=ollama_host,
         ),
-        model=ModelConfig(id=model_id, max_tokens_default=16, temperature_default=0.1),
+        model=ModelConfig(
+            id=model_id, max_tokens_default=16, temperature_default=0.1, quantization="none"
+        ),
     )
 
 

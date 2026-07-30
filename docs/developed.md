@@ -181,6 +181,23 @@ Hugging Face Transformers causal language model on the UBI machine.
   model. Not wired to any live endpoint: `/admin/model/unload` stays a
   `501` stub for every engine. This completes `OllamaEngine`'s
   implementation of every `InferenceEngine` method.
+- `TransformersEngine` quantized loading (`docs/quantization-design.md`):
+  new `model.quantization` config (`none` default, `4bit`, `8bit`;
+  `MODEL_QUANTIZATION` env override; fails fast on invalid values, same
+  pattern as `backend.engine`). `4bit` uses `BitsAndBytesConfig` with
+  NF4 + double quantization, fp16 compute dtype; `8bit` uses plain
+  `load_in_8bit`; `none` is byte-for-byte today's existing fp16 behavior.
+  New `bitsandbytes` dependency (`requirements.txt`) — must be installed
+  in UBI's `llm` conda env before enabling quantization; compatibility
+  with UBI's CUDA/torch build is an operator verification step, not
+  checked by this change. `./backend config` prints the configured value.
+  First-ever `TransformersEngine` unit tests
+  (`tests/test_transformers_engine.py`) verify the exact
+  `from_pretrained()` kwargs per setting via mocking — no real model load,
+  GPU, or `bitsandbytes` install required to run them. Live validation on
+  UBI (real `bitsandbytes` install, real model load, `/health`,
+  `/v1/chat/completions`) is a follow-up, not done as part of writing this
+  code.
 
 ## Configuration
 

@@ -72,12 +72,18 @@ model:
   id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
   max_tokens_default: 256
   temperature_default: 0.7
+  quantization: none  # or: 4bit | 8bit (TransformersEngine only)
 ```
 
 `engine: ollama` targets a live Ollama daemon instead of loading a
 Transformers model in-process — see `docs/ollama-engine-design.md` and
 `docs/architecture.md`'s Target deployment topology for where each engine
 is meant to run.
+
+`model.quantization` (`TransformersEngine` only) trades model quality for
+VRAM: `4bit`/`8bit` use `bitsandbytes` to fit larger models than fp16
+alone allows on a given GPU — see `docs/quantization-design.md`. Requires
+`bitsandbytes` installed (in `requirements.txt`).
 
 Configuration priority is:
 
@@ -95,6 +101,7 @@ Supported environment variable overrides:
 - `TEMPERATURE_DEFAULT=0.7`
 - `ENGINE=transformers`
 - `OLLAMA_HOST=http://127.0.0.1:11434`
+- `MODEL_QUANTIZATION=none`
 
 Edit the configuration file with:
 

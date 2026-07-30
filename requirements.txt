@@ -3,6 +3,7 @@ uvicorn
 transformers
 torch
 accelerate
+bitsandbytes
 sentencepiece
 jinja2
 PyYAML

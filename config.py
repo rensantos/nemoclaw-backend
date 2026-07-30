@@ -19,10 +19,12 @@ DEFAULTS = {
         "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         "max_tokens_default": 256,
         "temperature_default": 0.7,
+        "quantization": "none",
     },
 }
 
 VALID_ENGINES = ("transformers", "ollama")
+VALID_QUANTIZATIONS = ("none", "4bit", "8bit")
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class ModelConfig:
     id: str
     max_tokens_default: int
     temperature_default: float
+    quantization: str
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,15 @@ def load_config() -> Config:
         "TEMPERATURE_DEFAULT",
         _section_value(raw_config, "model", "temperature_default"),
     )
+    quantization = _env_value(
+        "MODEL_QUANTIZATION", _section_value(raw_config, "model", "quantization")
+    )
+    if quantization not in VALID_QUANTIZATIONS:
+        raise ValueError(
+            "Invalid model.quantization '{}'; valid values: {}".format(
+                quantization, ", ".join(VALID_QUANTIZATIONS)
+            )
+        )
 
     return Config(
         backend=BackendConfig(
@@ -146,6 +158,7 @@ def load_config() -> Config:
             id=model_id,
             max_tokens_default=max_tokens_default,
             temperature_default=temperature_default,
+            quantization=quantization,
         ),
     )
 
