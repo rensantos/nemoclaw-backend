@@ -138,11 +138,41 @@ Hugging Face Transformers causal language model on the UBI machine.
   health handling"). `cuda`/`gpu` on `/health` are sourced from
   `GPUManager` (new `GPUManager.gpu_name()`), not a direct `torch.cuda`
   call, since the backend process doesn't own Ollama's CUDA context.
-  `unload_model()`, `chat()`, and `generate_text()` still raise
-  `NotImplementedError` (Increments 3-4). Live-validated end to end against
-  a real Ollama daemon: `./backend start` with `ENGINE=ollama`, `/health`,
-  `/v1/models`, and the `ready`->`degraded` transition when the daemon
-  becomes unreachable mid-session.
+  `unload_model()` still raises `NotImplementedError` (Increment 4).
+  Live-validated end to end against a real Ollama daemon: `./backend start`
+  with `ENGINE=ollama`, `/health`, `/v1/models`, and the `ready`->`degraded`
+  transition when the daemon becomes unreachable mid-session.
+- OllamaEngine Increment 3 (`chat()`, `generate_text()`, against
+  `POST /api/chat` / `POST /api/generate`, a separate 120s timeout distinct
+  from the read paths' 5s): enforces Section 1's model-resolution decision
+  — `OllamaEngine.chat()` raises new `engines.base.ModelNotFoundError`
+  when the request's `model` doesn't match this instance's servable model,
+  which `api.py` turns into HTTP `404` with the pinned `model_not_found`
+  shape; `TransformersEngine.chat()` keeps its existing echo quirk
+  unchanged (`InferenceEngine.chat()` grew an optional `requested_model`
+  parameter both engines implement, TransformersEngine ignoring it).
+  `GenerateRequest` has no `model` field, so `/generate` has no equivalent
+  check. `EngineUnavailableError` during either call now also transitions
+  `lifecycle_state` to `degraded` (matching `health()`) and becomes HTTP
+  `503` via `api.py`. Token usage maps `prompt_eval_count`/`eval_count` to
+  `usage.prompt_tokens`/`completion_tokens`, reporting `0` and logging a
+  warning when either is missing. `openapi/backend-node.openapi.yaml`
+  amended in the same increment: new `ModelNotFoundResponse` schema,
+  `404`/`503` on `POST /v1/chat/completions`, `503` on `POST /generate`;
+  also fixed a pre-existing drift where `ModelObject.owned_by` was pinned
+  `const: local` even though `OllamaEngine` already returned `"ollama"`
+  since Increment 2. Note: the additive `requested_model` response field
+  Section 1 describes for "tolerated mismatch" cases is not implemented —
+  there is no tolerated-mismatch code path in the single-active-engine
+  design, so the field would never be populated; adding unused schema
+  surface was skipped as against AGENTS.md's "never fake unavailable
+  functionality" spirit. Live-validated against a real Ollama daemon and
+  real models via `./backend start`: successful chat with real token
+  usage, HTTP `404` on a mismatched model, and `/generate`. Also observed
+  and documented (not fixed, out of scope): reasoning-capable models like
+  `qwen3` can return empty `content` if the token budget is exhausted by
+  hidden "thinking" before an answer — confirmed as an honest pass-through
+  of the daemon's real response, not an engine defect.
 
 ## Configuration
 

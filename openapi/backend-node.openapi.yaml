@@ -53,7 +53,7 @@ paths:
       x-implementation-status: partial
       x-current-behavior: |
         Non-streaming chat completion is implemented end to end against the
-        configured engine (currently TransformersEngine).
+        configured engine.
 
         "stream" is accepted by the request schema but is NOT implemented:
         if "stream": true, the handler immediately raises HTTP 400 with
@@ -61,12 +61,25 @@ paths:
         The target contract (once the streaming phase lands) is
         Server-Sent Events per OpenAI convention when "stream": true.
 
-        The response "model" field currently echoes the request's "model"
-        (or the configured default if omitted) as a label. It does NOT
-        select which model actually serves the request — there is exactly
-        one loaded model per backend instance, chosen at process startup.
-        A client requesting a "model" other than the loaded one still gets
-        served by the loaded model, labeled with the requested id.
+        Model-resolution behavior now differs by active engine
+        (docs/ollama-engine-design.md Section 1):
+
+        - TransformersEngine (unchanged, out of scope for that decision):
+          the response "model" field echoes the request's "model" (or the
+          configured default if omitted) as a label. It does NOT select
+          which model actually serves the request — there is exactly one
+          loaded model per backend instance, chosen at process startup. A
+          client requesting a "model" other than the loaded one still gets
+          served by the loaded model, labeled with the requested id.
+        - OllamaEngine: a request naming a "model" other than this
+          instance's configured/servable model is rejected with HTTP 404
+          (see the "404" response below) — never silently served by a
+          different model. If "model" is omitted or matches the servable
+          model, the response "model" field is the actual served model.
+        - Either engine: if the engine's backing runtime is unreachable
+          (currently only possible for OllamaEngine, when the Ollama
+          daemon is down), the request fails with HTTP 503 (see the "503"
+          response below) rather than hanging or raising an unhandled 500.
       description: |
         Implemented for non-streaming requests. Streaming ("stream": true)
         is contractually defined as SSE per OpenAI convention but returns
@@ -92,12 +105,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SimpleErrorResponse"
+        "404":
+          description: |
+            "model" names a model this backend instance cannot serve.
+            OllamaEngine only, per docs/ollama-engine-design.md Section 1;
+            TransformersEngine never returns this today (see
+            x-current-behavior).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelNotFoundResponse"
         "422":
           description: Request body failed schema validation.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/HTTPValidationError"
+        "503":
+          description: |
+            The engine's backing runtime is unreachable (e.g. the Ollama
+            daemon is down).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
 
   /v1/models:
     get:
@@ -443,6 +474,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GenerateResponse"
+        "503":
+          description: |
+            The engine's backing runtime is unreachable (e.g. the Ollama
+            daemon is down). GenerateRequest has no "model" field, so the
+            model-resolution 404 (see POST /v1/chat/completions) does not
+            apply here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
 
 components:
   schemas:
@@ -463,9 +504,12 @@ components:
         model:
           type: [string, "null"]
           description: >-
-            Optional. Echoed back as a label in the response; does not
-            select which loaded model serves the request (single model per
-            backend instance).
+            Optional. Behavior differs by active engine — see
+            x-current-behavior on POST /v1/chat/completions.
+            TransformersEngine: echoed back as a label, does not select
+            which model serves the request. OllamaEngine: must be omitted
+            or equal to this instance's servable model, or the request is
+            rejected with HTTP 404 (model_not_found).
         messages:
           type: array
           items:
@@ -564,7 +608,12 @@ components:
           type: integer
         owned_by:
           type: string
-          const: local
+          description: >-
+            Engine that owns this model, per docs/ollama-engine-design.md
+            Section 2: "local" for TransformersEngine, "ollama" for
+            OllamaEngine. Not a namespacing scheme — single-active-engine
+            per backend instance means at most one value is ever present.
+          example: local
 
     CompletionRequest:
       type: object
@@ -844,6 +893,34 @@ components:
         detail:
           type: string
       description: FastAPI's default HTTPException body shape.
+
+    ModelNotFoundResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type, param, code]
+          properties:
+            message:
+              type: string
+              example: >-
+                The model 'llama2:7b' does not exist or is not currently
+                loaded by this backend instance.
+            type:
+              type: string
+              const: invalid_request_error
+            param:
+              type: string
+              const: model
+            code:
+              type: string
+              const: model_not_found
+      description: >-
+        OpenAI-style model_not_found error shape, per
+        docs/ollama-engine-design.md Section 1. Deliberately not
+        SimpleErrorResponse's {"detail": "..."} shape — matches OpenAI's own
+        convention for this error instead.
 
     HTTPValidationError:
       type: object

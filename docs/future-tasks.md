@@ -86,22 +86,47 @@
   startup failure, daemon-unreachable startup failure, and the
   `ready -> degraded` transition when the daemon goes down mid-session —
   all confirmed against real `ollama list` models, not just mocks.
-- Increment 3 (next): `OllamaEngine` `chat()` / `generate_text()`, including the
-  model-resolution decision (404 `model_not_found` on mismatch,
-  `EngineUnavailableError` -> `503` on daemon-down) and token-usage mapping
-  (`prompt_eval_count`/`eval_count`, with the documented `0`-fallback and
-  warning log when counts are missing). Unit tests with mocked responses;
-  live validation on the Local Node via `curl /v1/chat/completions`.
-- Increment 4: `OllamaEngine.unload_model()` (`keep_alive: 0` mapping),
-  tested as an engine method only — not wired to any live endpoint.
-- Increment 5 (separate, code-adjacent): the `openapi/backend-node.openapi.yaml`
-  amendments this design requires. `/health` status-value widening
-  (`HealthResponse.status` enum `[ok, degraded, unavailable]`, with the
-  `status`-is-a-projection-of-`lifecycle_state` rule) already landed ahead
-  of Increment 2's code, in commits `c0ffe4b`/`208823a`. Still pending: the
-  new `model_not_found` error schema and the optional `requested_model`
-  field, which land with Increment 3 (the increment that actually needs
-  them), not bundled earlier.
+- Increment 3 (done): `OllamaEngine` `chat()` / `generate_text()` against
+  `POST /api/chat` / `POST /api/generate`, with a separate, generous fixed
+  120s timeout (distinct from the read paths' 5s) — resolves the "Timeout
+  behavior" question the design doc left open for this increment; full
+  operator-configurability is still deferred. Model-resolution decision:
+  `OllamaEngine.chat()` raises new `engines.base.ModelNotFoundError` on a
+  mismatched requested `model`, before any daemon call; `api.py` maps it
+  to `404 model_not_found`. `InferenceEngine.chat()` gained an optional
+  `requested_model` parameter (`TransformersEngine` accepts and ignores
+  it, keeping its existing echo-and-serve quirk exactly as before — out
+  of scope per Section 1). `GenerateRequest` has no `model` field, so
+  `/generate` has no equivalent check. `EngineUnavailableError` during
+  either call now also flips `lifecycle_state` to `degraded` and becomes
+  `503` via `api.py`. Token-usage mapping
+  (`prompt_eval_count`/`eval_count`, `0`-fallback + warning log when
+  missing) implemented as designed. Unit tests with mocked responses
+  (`tests/test_engine_factory.py`, `tests/test_inference_service.py`);
+  live-validated on a real Local Node against real Ollama models: full
+  HTTP round trip through `./backend start` for a successful chat (real
+  token counts), the `404` rejection on a mismatched model, and
+  `/generate`. Not implemented: `requested_model` on the *response* —
+  Section 1's optional additive field for "tolerated mismatch" cases has
+  no code path that would ever populate it in the single-active-engine
+  design, so it was skipped rather than added unused.
+- Increment 4 (next): `OllamaEngine.unload_model()` (`keep_alive: 0`
+  mapping), tested as an engine method only — not wired to any live
+  endpoint.
+- Increment 5 (done, landed with Increment 3): the
+  `openapi/backend-node.openapi.yaml` amendments this design requires.
+  `/health` status-value widening had already landed ahead of Increment 2,
+  in commits `c0ffe4b`/`208823a`. Increment 3 added: new
+  `ModelNotFoundResponse` schema, `404`/`503` responses on
+  `POST /v1/chat/completions`, `503` on `POST /generate`, and updated
+  `x-current-behavior`/field descriptions to state that model-resolution
+  behavior is now engine-dependent. Also fixed, while in the file: a
+  pre-existing drift where `ModelObject.owned_by` was pinned `const:
+  local`, which `OllamaEngine` had already violated (`"ollama"`) since
+  Increment 2 shipped without this file being updated for it — now
+  `type: string` with both values documented. The `requested_model`
+  request/response field was deliberately not added (see Increment 3
+  above).
 - Apply the model-resolution decision (`docs/ollama-engine-design.md`
   Section 1) to the existing `TransformersEngine`/`api.py`
   `/v1/chat/completions` path. Deliberately deferred out of the

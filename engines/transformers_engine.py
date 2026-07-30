@@ -60,7 +60,16 @@ class TransformersEngine(InferenceEngine):
             ],
         }
 
-    def chat(self, messages: List, max_tokens: Optional[int], temperature: Optional[float]):
+    def chat(
+        self,
+        messages: List,
+        max_tokens: Optional[int],
+        temperature: Optional[float],
+        requested_model: Optional[str] = None,
+    ):
+        # requested_model is accepted for interface parity with OllamaEngine
+        # but intentionally unused: fixing this engine's echo-and-serve
+        # quirk is out of scope (docs/ollama-engine-design.md Section 1).
         self.load_model()
         max_new_tokens = (
             self.config.max_tokens_default if max_tokens is None else max_tokens

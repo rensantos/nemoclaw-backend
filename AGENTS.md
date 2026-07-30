@@ -193,14 +193,62 @@ deployment topology):
   (`ready`->`ok`, `degraded`->`degraded`, else->`unavailable`) instead of
   trusting whatever the engine returns — matching the mapping already
   pinned in `openapi/backend-node.openapi.yaml`'s `HealthResponse.status`.
-- `unload_model()`, `chat()`, `generate_text()` still raise
-  `NotImplementedError` (Increments 3-4 per `docs/ollama-engine-design.md`).
+- `unload_model()` still raises `NotImplementedError` (Increment 4).
+
+OllamaEngine Increment 3 (`chat()`/`generate_text()`, live-validated
+against a real Local Node and real Ollama models):
+
+- `OllamaEngine.chat()` posts `POST /api/chat`; `generate_text()` posts
+  `POST /api/generate`. Both use a separate, generous fixed 120s timeout
+  (distinct from read-path calls' 5s), resolving the "Timeout behavior"
+  question `docs/ollama-engine-design.md` Section 7 left open for this
+  increment — full operator-configurability of that timeout is deferred,
+  not decided as unnecessary.
+- Model-resolution decision (`docs/ollama-engine-design.md` Section 1) is
+  enforced only in `OllamaEngine.chat()`: a request naming a `model` other
+  than this instance's configured/servable model raises new
+  `engines.base.ModelNotFoundError` before any daemon call, which `api.py`
+  turns into HTTP `404` with the pinned `model_not_found` error shape.
+  `TransformersEngine.chat()` keeps its existing echo-and-serve quirk
+  unchanged (out of scope, per that section's explicit scope boundary).
+  `GenerateRequest` has no `model` field, so `/generate` has no
+  model-resolution check to make.
+  `InferenceEngine.chat()`'s signature grew an optional `requested_model`
+  parameter (both engines implement it; `TransformersEngine` accepts and
+  ignores it) to carry the client's requested model id down to the engine
+  that needs to check it.
+- `EngineUnavailableError` during `chat()`/`generate_text()` now also
+  transitions `InferenceService`'s `lifecycle_state` to `degraded` (same
+  as a failed `health()`); `api.py` turns it into HTTP `503` on both
+  `/v1/chat/completions` and `/generate`.
+- Token-usage mapping (`docs/ollama-engine-design.md` Section 4):
+  `prompt_eval_count`/`eval_count` -> `usage.prompt_tokens`/
+  `completion_tokens`; missing fields report `0` and log a warning,
+  per AGENTS.md's "never fake unavailable functionality" rule.
+- `openapi/backend-node.openapi.yaml` amended in this increment (per the
+  AGENTS.md rule that contract changes land with the behavior that needs
+  them): new `ModelNotFoundResponse` schema, `404`/`503` responses on
+  `POST /v1/chat/completions`, `503` on `POST /generate`, updated
+  `x-current-behavior` describing the now-engine-dependent model
+  resolution. Also fixed a pre-existing drift found while doing this:
+  `ModelObject.owned_by` was pinned `const: local`, which `OllamaEngine`
+  already violated since Increment 2 (`"ollama"`) — now `type: string`
+  with both values documented.
+- Live-validated against a real Ollama daemon and real pulled models:
+  successful chat with correct token usage, `404 model_not_found` on a
+  mismatched model (via real HTTP through `./backend start`), and
+  `generate_text()` against `/generate`. Noted, not fixed (out of scope):
+  reasoning-capable models like `qwen3` can return empty `content` if the
+  token budget is exhausted by hidden "thinking" before an answer is
+  reached — confirmed as an honest pass-through of the daemon's own
+  response, not an engine bug; Ollama's `"think": false` option is not
+  wired up (undecided by the design doc, left for a future increment if
+  needed).
 
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
-behavior, `docs/model-lifecycle-design.md`) and OllamaEngine Increment 3
-(`chat()`/`generate_text()`, model-resolution 404, token-usage mapping,
-`docs/ollama-engine-design.md`) are both open; either may be picked up
-next.
+behavior, `docs/model-lifecycle-design.md`) and OllamaEngine Increment 4
+(`unload_model()`, `docs/ollama-engine-design.md`) are both open; either
+may be picked up next.
 
 ## Commands
 

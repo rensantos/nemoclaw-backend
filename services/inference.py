@@ -41,11 +41,19 @@ class InferenceService:
     def list_models(self):
         return self.engine.list_models()
 
-    def chat(self, messages, max_tokens, temperature):
-        return self.engine.chat(messages, max_tokens, temperature)
+    def chat(self, messages, max_tokens, temperature, requested_model=None):
+        try:
+            return self.engine.chat(messages, max_tokens, temperature, requested_model)
+        except EngineUnavailableError:
+            self.lifecycle_state = LifecycleState.DEGRADED
+            raise
 
     def generate_text(self, prompt, max_new_tokens, temperature):
-        return self.engine.generate_text(prompt, max_new_tokens, temperature)
+        try:
+            return self.engine.generate_text(prompt, max_new_tokens, temperature)
+        except EngineUnavailableError:
+            self.lifecycle_state = LifecycleState.DEGRADED
+            raise
 
 
 def _build_engine(config):

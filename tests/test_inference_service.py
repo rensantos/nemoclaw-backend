@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 
+from engines.base import EngineUnavailableError, ModelNotFoundError
 from services.inference import InferenceService
 from services.lifecycle import LifecycleState
 
@@ -26,8 +27,8 @@ class FakeEngine:
         self.calls.append("list_models")
         return {"object": "list", "data": []}
 
-    def chat(self, messages, max_tokens, temperature):
-        self.calls.append(("chat", messages, max_tokens, temperature))
+    def chat(self, messages, max_tokens, temperature, requested_model=None):
+        self.calls.append(("chat", messages, max_tokens, temperature, requested_model))
         return {
             "content": "hello",
             "prompt_tokens": 1,
@@ -116,7 +117,15 @@ class InferenceServiceTests(unittest.TestCase):
         result = service.chat(["message"], 32, 0.5)
 
         self.assertEqual(result["content"], "hello")
-        self.assertIn(("chat", ["message"], 32, 0.5), engine.calls)
+        self.assertIn(("chat", ["message"], 32, 0.5, None), engine.calls)
+
+    def test_service_delegates_chat_with_requested_model(self):
+        engine = FakeEngine()
+        service = InferenceService(engine)
+
+        service.chat(["message"], 32, 0.5, requested_model="tiny")
+
+        self.assertIn(("chat", ["message"], 32, 0.5, "tiny"), engine.calls)
 
     def test_service_delegates_generate_text(self):
         engine = FakeEngine()
@@ -126,6 +135,42 @@ class InferenceServiceTests(unittest.TestCase):
 
         self.assertEqual(result["response"], "prompt")
         self.assertIn(("generate_text", "prompt", 12, 0.7), engine.calls)
+
+    def test_chat_transitions_to_degraded_on_engine_unavailable(self):
+        class UnavailableEngine(FakeEngine):
+            def chat(self, messages, max_tokens, temperature, requested_model=None):
+                raise EngineUnavailableError("daemon down")
+
+        service = InferenceService(UnavailableEngine())
+
+        with self.assertRaises(EngineUnavailableError):
+            service.chat(["message"], 32, 0.5)
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
+
+    def test_generate_text_transitions_to_degraded_on_engine_unavailable(self):
+        class UnavailableEngine(FakeEngine):
+            def generate_text(self, prompt, max_new_tokens, temperature):
+                raise EngineUnavailableError("daemon down")
+
+        service = InferenceService(UnavailableEngine())
+
+        with self.assertRaises(EngineUnavailableError):
+            service.generate_text("prompt", 12, 0.7)
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
+
+    def test_chat_propagates_model_not_found_without_changing_lifecycle(self):
+        class RejectingEngine(FakeEngine):
+            def chat(self, messages, max_tokens, temperature, requested_model=None):
+                raise ModelNotFoundError(requested_model, "servable-model")
+
+        service = InferenceService(RejectingEngine())
+
+        with self.assertRaises(ModelNotFoundError):
+            service.chat(["message"], 32, 0.5, requested_model="bogus")
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
 
 
 class ApiBoundaryTests(unittest.TestCase):
@@ -156,6 +201,15 @@ class ApiBoundaryTests(unittest.TestCase):
 
         self.assertEqual(api_source.count("lifecycle_stub_response()"), 3)
         self.assertEqual(api_source.count("JSONResponse(status_code=501"), 3)
+
+    def test_chat_completions_handles_model_not_found_and_engine_unavailable(self):
+        api_source = Path("api.py").read_text(encoding="utf-8")
+
+        self.assertIn("except ModelNotFoundError as exc:", api_source)
+        self.assertIn('"code": "model_not_found"', api_source)
+        self.assertIn("status_code=404", api_source)
+        self.assertIn("except EngineUnavailableError as exc:", api_source)
+        self.assertIn("status_code=503", api_source)
 
 
 if __name__ == "__main__":

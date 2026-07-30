@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from config import settings
+from engines.base import EngineUnavailableError, ModelNotFoundError
 from services.inference import create_inference_service
 from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
 
@@ -31,7 +32,29 @@ def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="messages must not be empty")
 
     model_id = req.model or settings.model_id
-    result = inference_service.chat(req.messages, req.max_tokens, req.temperature)
+    try:
+        result = inference_service.chat(
+            req.messages, req.max_tokens, req.temperature, req.model
+        )
+    except ModelNotFoundError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": (
+                        "The model '{}' does not exist or is not currently "
+                        "loaded by this backend instance.".format(
+                            exc.requested_model
+                        )
+                    ),
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found",
+                }
+            },
+        )
+    except EngineUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     return {
         "id": "chatcmpl-{}".format(uuid.uuid4().hex),
@@ -58,11 +81,14 @@ def chat_completions(req: ChatCompletionRequest):
 
 @router.post("/generate")
 def generate(req: GenerateRequest):
-    return inference_service.generate_text(
-        req.prompt,
-        req.max_new_tokens,
-        req.temperature,
-    )
+    try:
+        return inference_service.generate_text(
+            req.prompt,
+            req.max_new_tokens,
+            req.temperature,
+        )
+    except EngineUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/admin/model/load", status_code=501)

@@ -18,6 +18,24 @@ class EngineUnavailableError(Exception):
         self.partial_health = partial_health or {}
 
 
+class ModelNotFoundError(Exception):
+    """Raised when a request names a model this engine instance cannot
+    serve (docs/ollama-engine-design.md Section 1's reject-on-mismatch
+    decision). Not raised by every engine: TransformersEngine keeps its
+    existing echo-and-serve quirk, out of scope for this decision.
+    """
+
+    def __init__(self, requested_model: str, servable_model: str):
+        self.requested_model = requested_model
+        self.servable_model = servable_model
+        super().__init__(
+            "Model '{}' does not exist or is not currently loaded by this "
+            "backend instance (servable model: '{}')".format(
+                requested_model, servable_model
+            )
+        )
+
+
 class InferenceEngine(ABC):
     """Minimal interface required by the Nemoclaw Backend API."""
 
@@ -38,7 +56,13 @@ class InferenceEngine(ABC):
         pass
 
     @abstractmethod
-    def chat(self, messages: List, max_tokens: Optional[int], temperature: Optional[float]):
+    def chat(
+        self,
+        messages: List,
+        max_tokens: Optional[int],
+        temperature: Optional[float],
+        requested_model: Optional[str] = None,
+    ):
         pass
 
     @abstractmethod
