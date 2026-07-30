@@ -51,6 +51,11 @@ class GPUManager:
             driver_version=selected.driver_version if selected else self.driver_version(),
         )
 
+    def gpu_name(self) -> Optional[str]:
+        gpus = self.detect_gpus()
+        selected = self._gpu_by_index(gpus, str(self.config.backend.gpu))
+        return selected.name if selected else None
+
     def driver_version(self) -> str:
         gpus = self.detect_gpus()
         if not gpus:

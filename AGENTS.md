@@ -164,8 +164,43 @@ Phase 5 Increment 2 (command surface stubs, no lifecycle behavior):
   `detail` message, and exit non-zero. No timeout/wait/progress logic yet;
   that belongs to the real implementation.
 
-Next milestone: Phase 5 Increment 3, real model load/unload/switch behavior
-per `docs/model-lifecycle-design.md`.
+OllamaEngine Increment 1 (config + engine factory):
+
+- `config.yaml`'s `backend.engine` (`transformers` | `ollama`, default
+  `transformers`), `ENGINE` env override, fail-fast on invalid values.
+- `services/inference.py`'s `_build_engine()` factory selects the engine
+  class. `engine: transformers` behavior is unchanged.
+
+OllamaEngine Increment 2 (real read paths, live-validated on a Local Node
+running actual Ollama — never UBI, per `docs/architecture.md`'s Target
+deployment topology):
+
+- `backend.ollama_host` (`config.yaml`, default `http://127.0.0.1:11434`,
+  `OLLAMA_HOST` env override) is the daemon's base URL.
+- `OllamaEngine.load_model()` calls `GET /api/tags` and confirms the
+  configured `model.id` tag is present; never pulls. A missing tag raises
+  a clear startup error naming `ollama pull <tag>`.
+- `OllamaEngine.health()` / `list_models()` also use `GET /api/tags`;
+  `list_models()` returns only the one configured tag, `owned_by:
+  "ollama"`. `cuda`/`gpu` are sourced from `GPUManager` (new
+  `GPUManager.gpu_name()`), not a direct `torch.cuda` call, since the
+  backend process doesn't own Ollama's CUDA context.
+- New `engines.base.EngineUnavailableError` (optional `partial_health`
+  payload) is raised when the daemon is unreachable.
+  `InferenceService.health()` catches it, transitions `lifecycle_state` to
+  `degraded`, and projects `HealthResponse.status` from `lifecycle_state`
+  via the new `services/lifecycle.health_status_for_lifecycle_state()`
+  (`ready`->`ok`, `degraded`->`degraded`, else->`unavailable`) instead of
+  trusting whatever the engine returns — matching the mapping already
+  pinned in `openapi/backend-node.openapi.yaml`'s `HealthResponse.status`.
+- `unload_model()`, `chat()`, `generate_text()` still raise
+  `NotImplementedError` (Increments 3-4 per `docs/ollama-engine-design.md`).
+
+Next milestones: Phase 5 Increment 3 (real model load/unload/switch
+behavior, `docs/model-lifecycle-design.md`) and OllamaEngine Increment 3
+(`chat()`/`generate_text()`, model-resolution 404, token-usage mapping,
+`docs/ollama-engine-design.md`) are both open; either may be picked up
+next.
 
 ## Commands
 

@@ -65,12 +65,19 @@ backend:
   host: 127.0.0.1
   port: 8000
   gpu: 0
+  engine: transformers  # or: ollama
+  ollama_host: http://127.0.0.1:11434  # only used when engine: ollama
 
 model:
   id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
   max_tokens_default: 256
   temperature_default: 0.7
 ```
+
+`engine: ollama` targets a live Ollama daemon instead of loading a
+Transformers model in-process — see `docs/ollama-engine-design.md` and
+`docs/architecture.md`'s Target deployment topology for where each engine
+is meant to run.
 
 Configuration priority is:
 
@@ -86,6 +93,8 @@ Supported environment variable overrides:
 - `PORT=8000`
 - `MAX_TOKENS_DEFAULT=256`
 - `TEMPERATURE_DEFAULT=0.7`
+- `ENGINE=transformers`
+- `OLLAMA_HOST=http://127.0.0.1:11434`
 
 Edit the configuration file with:
 

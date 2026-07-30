@@ -67,6 +67,28 @@ class GPUManagerTests(unittest.TestCase):
         self.assertTrue(current.cuda_available)
         self.assertEqual(current.driver_version, "535.0")
 
+    def test_gpu_name_returns_selected_gpu(self):
+        manager = GPUManager(FakeConfig())
+        gpu = GPUInfo(
+            index="0",
+            name="RTX A4000",
+            memory_total_mib=16384,
+            memory_used_mib=512,
+            memory_free_mib=15872,
+            temperature_c=45,
+            utilization_percent=12,
+            driver_version="535.0",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[gpu]):
+            self.assertEqual(manager.gpu_name(), "RTX A4000")
+
+    def test_gpu_name_returns_none_when_no_gpu_detected(self):
+        manager = GPUManager(FakeConfig())
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[]):
+            self.assertIsNone(manager.gpu_name())
+
 
 if __name__ == "__main__":
     unittest.main()

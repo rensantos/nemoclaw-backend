@@ -106,20 +106,43 @@ Hugging Face Transformers causal language model on the UBI machine.
   model, raw Ollama tags as ids, no namespacing) for all engines, keeps one
   engine active per backend instance for this phase, and maps each
   `InferenceEngine` method to the Ollama daemon's HTTP API.
-- OllamaEngine Increment 1 (config + engine factory, no Ollama HTTP logic
-  yet): `config.yaml`'s `backend.engine` (`transformers` | `ollama`,
-  default `transformers`) selects the active engine, with an `ENGINE` env
-  override; `config.py`'s `load_config()` fails fast with a clear error if
-  the value isn't one of the two. `services/inference.py`'s new
-  `_build_engine(config)` helper is the factory `create_inference_service()`
-  calls to construct the selected engine, replacing the old unconditional
-  `TransformersEngine(settings)` construction. `engines/ollama_engine.py`
-  contains a skeleton `OllamaEngine`: `load_model()` is a safe no-op (so
-  `engine: ollama` starts up cleanly, since `InferenceService.__init__`
-  calls `load_model()` eagerly); every other method raises
-  `NotImplementedError` pointing at the design doc until later increments
-  implement it. With `engine: transformers` (the default), behavior is
+- OllamaEngine Increment 1 (config + engine factory): `config.yaml`'s
+  `backend.engine` (`transformers` | `ollama`, default `transformers`)
+  selects the active engine, with an `ENGINE` env override; `config.py`'s
+  `load_config()` fails fast with a clear error if the value isn't one of
+  the two. `services/inference.py`'s `_build_engine(config)` helper is the
+  factory `create_inference_service()` calls to construct the selected
+  engine, replacing the old unconditional `TransformersEngine(settings)`
+  construction. With `engine: transformers` (the default), behavior is
   unchanged from before this increment.
+- OllamaEngine Increment 2 (real read paths: `health()`, `list_models()`,
+  `load_model()`, against a live Ollama daemon on the Local Node — never
+  UBI, see Physical placement in `docs/architecture.md`'s Target
+  deployment topology): `backend.ollama_host` (`config.yaml`, default
+  `http://127.0.0.1:11434`, `OLLAMA_HOST` env override) is the daemon's
+  base URL. `load_model()` calls `GET /api/tags` and confirms the
+  configured `model.id` tag is present, never pulling; a missing tag
+  raises a clear startup error naming `ollama pull <tag>`. `health()` and
+  `list_models()` also call `GET /api/tags`; `list_models()` returns only
+  the one configured tag, `owned_by: "ollama"`, matching the design's
+  single-servable-model decision. A new `engines.base.EngineUnavailableError`
+  (with an optional `partial_health` payload) is raised whenever the
+  daemon is unreachable. `services/lifecycle.py`'s new
+  `health_status_for_lifecycle_state()` implements the pinned
+  `HealthResponse.status` projection (`ready`->`ok`, `degraded`->
+  `degraded`, everything else->`unavailable`); `InferenceService.health()`
+  now catches `EngineUnavailableError`, transitions `lifecycle_state` to
+  `degraded`, and projects `status` from it instead of trusting whatever
+  the engine returns — closing the gap `openapi/backend-node.openapi.yaml`
+  flagged ("real degraded/unavailable reporting arrives with OllamaEngine
+  health handling"). `cuda`/`gpu` on `/health` are sourced from
+  `GPUManager` (new `GPUManager.gpu_name()`), not a direct `torch.cuda`
+  call, since the backend process doesn't own Ollama's CUDA context.
+  `unload_model()`, `chat()`, and `generate_text()` still raise
+  `NotImplementedError` (Increments 3-4). Live-validated end to end against
+  a real Ollama daemon: `./backend start` with `ENGINE=ollama`, `/health`,
+  `/v1/models`, and the `ready`->`degraded` transition when the daemon
+  becomes unreachable mid-session.
 
 ## Configuration
 
@@ -133,9 +156,15 @@ Environment variables can override YAML values for one-off runs:
 - `PORT`
 - `MAX_TOKENS_DEFAULT`
 - `TEMPERATURE_DEFAULT`
+- `ENGINE`
+- `OLLAMA_HOST`
 
 ## Compatibility
 
-The backend intentionally avoids Docker, vLLM, LangChain, Ollama, OpenAI cloud
-calls, routing, VPN, and SSH logic. Its only responsibility is serving a local
-Transformers model through an OpenAI-compatible API.
+The backend intentionally avoids Docker, vLLM, LangChain, OpenAI cloud calls,
+routing, VPN, and SSH logic. `OllamaEngine` is the one deliberate exception to
+"no Ollama": it is a supported, config-selected engine (`backend.engine:
+ollama`) for the Local Node, per `docs/architecture.md`'s Target deployment
+topology and `docs/ollama-engine-design.md`. Its only responsibility remains
+serving one configured model, through an OpenAI-compatible API, per active
+engine.

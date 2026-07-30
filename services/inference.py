@@ -1,6 +1,10 @@
 from config import settings
-from engines.base import InferenceEngine
-from services.lifecycle import LifecycleState, lifecycle_not_implemented_response
+from engines.base import EngineUnavailableError, InferenceEngine
+from services.lifecycle import (
+    LifecycleState,
+    health_status_for_lifecycle_state,
+    lifecycle_not_implemented_response,
+)
 
 
 class InferenceService:
@@ -13,7 +17,16 @@ class InferenceService:
         self.lifecycle_state = LifecycleState.READY
 
     def health(self):
-        health = dict(self.engine.health())
+        try:
+            health = dict(self.engine.health())
+        except EngineUnavailableError as exc:
+            self.lifecycle_state = LifecycleState.DEGRADED
+            health = dict(exc.partial_health)
+            health.setdefault("model", getattr(self.engine, "model_id", None))
+            health.setdefault("cuda", False)
+            health.setdefault("gpu", None)
+
+        health["status"] = health_status_for_lifecycle_state(self.lifecycle_state)
         health["lifecycle_state"] = self.lifecycle_state.value
         return health
 

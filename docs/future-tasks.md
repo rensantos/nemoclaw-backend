@@ -62,22 +62,31 @@
 
 - Increment 1 (done): config (`backend.engine`, default `transformers`,
   `ENGINE` env override, fail-fast on invalid values) + `services/inference.
-  _build_engine()` factory called from `create_inference_service()` +
-  `engines/ollama_engine.py` skeleton (`load_model()` is a safe no-op so
-  startup doesn't crash; every other method raises `NotImplementedError`).
+  _build_engine()` factory called from `create_inference_service()`.
   Unit tests: `tests/test_config.py` (precedence, invalid-value fail-fast),
-  `tests/test_engine_factory.py` (factory selection, stub construction and
-  behavior). `engine: transformers` (default) behavior is unchanged.
-  Operator validation still needed on UBI (Step 7): `./backend restart &&
-  ./backend status` and a live chat completion should be unchanged;
-  `ENGINE=ollama` startup should construct cleanly and fail requests with
-  `NotImplementedError`-derived errors, not hang or crash the process.
-- Increment 2 (next): `OllamaEngine` read paths — `health()`, `list_models()`,
-  `load_model()` (tag-presence validation, no pulling). Unit tests with
-  mocked Ollama HTTP responses; live validation on the Ollama-hosting Local
-  Node (`docs/architecture.md`'s Target deployment topology — not UBI,
-  which runs `TransformersEngine`) with a small pulled model.
-- Increment 3: `OllamaEngine` `chat()` / `generate_text()`, including the
+  `tests/test_engine_factory.py` (factory selection). `engine: transformers`
+  (default) behavior is unchanged. UBI keeps running `TransformersEngine`
+  only, per `docs/architecture.md`'s Target deployment topology — no
+  operator validation of `engine: ollama` on UBI is expected or needed.
+- Increment 2 (done): `OllamaEngine` real read paths — `health()`,
+  `list_models()`, `load_model()` (tag-presence validation, no pulling),
+  against `GET /api/tags`. New `backend.ollama_host` config
+  (default `http://127.0.0.1:11434`, `OLLAMA_HOST` env override); new
+  `engines.base.EngineUnavailableError`; `InferenceService.health()` now
+  catches it and projects `HealthResponse.status` from `lifecycle_state`
+  via `services/lifecycle.health_status_for_lifecycle_state()`
+  (`ready -> ok`, `degraded -> degraded`, else `-> unavailable`), closing
+  the gap flagged in `openapi/backend-node.openapi.yaml`'s `/health`
+  description. `cuda`/`gpu` sourced from `GPUManager` (new
+  `GPUManager.gpu_name()`), not `torch.cuda`. Unit tests with mocked
+  `urllib` responses (`tests/test_engine_factory.py`); live-validated on a
+  real Local Node (an operator's own machine running Ollama, per
+  `docs/architecture.md`'s Target deployment topology): `./backend start`
+  with `ENGINE=ollama`, `GET /health`, `GET /v1/models`, missing-tag
+  startup failure, daemon-unreachable startup failure, and the
+  `ready -> degraded` transition when the daemon goes down mid-session —
+  all confirmed against real `ollama list` models, not just mocks.
+- Increment 3 (next): `OllamaEngine` `chat()` / `generate_text()`, including the
   model-resolution decision (404 `model_not_found` on mismatch,
   `EngineUnavailableError` -> `503` on daemon-down) and token-usage mapping
   (`prompt_eval_count`/`eval_count`, with the documented `0`-fallback and
@@ -86,10 +95,13 @@
 - Increment 4: `OllamaEngine.unload_model()` (`keep_alive: 0` mapping),
   tested as an engine method only — not wired to any live endpoint.
 - Increment 5 (separate, code-adjacent): the `openapi/backend-node.openapi.yaml`
-  amendments this design requires (new `model_not_found` error schema,
-  optional `requested_model` field, `/health` status-value widening for
-  daemon-down reporting) must land in the same increment as the runtime
-  behavior that needs them, not bundled into Increments 1-4.
+  amendments this design requires. `/health` status-value widening
+  (`HealthResponse.status` enum `[ok, degraded, unavailable]`, with the
+  `status`-is-a-projection-of-`lifecycle_state` rule) already landed ahead
+  of Increment 2's code, in commits `c0ffe4b`/`208823a`. Still pending: the
+  new `model_not_found` error schema and the optional `requested_model`
+  field, which land with Increment 3 (the increment that actually needs
+  them), not bundled earlier.
 - Apply the model-resolution decision (`docs/ollama-engine-design.md`
   Section 1) to the existing `TransformersEngine`/`api.py`
   `/v1/chat/completions` path. Deliberately deferred out of the

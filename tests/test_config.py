@@ -37,6 +37,26 @@ class ConfigEngineSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._load({}, env={"ENGINE": "bogus"})
 
+    def test_ollama_host_defaults_when_unset(self):
+        result = self._load({})
+
+        self.assertEqual(result.backend.ollama_host, "http://127.0.0.1:11434")
+
+    def test_ollama_host_reads_yaml_value(self):
+        result = self._load(
+            {"backend": {"ollama_host": "http://10.0.0.5:11434"}}
+        )
+
+        self.assertEqual(result.backend.ollama_host, "http://10.0.0.5:11434")
+
+    def test_ollama_host_env_override_takes_precedence_over_yaml(self):
+        result = self._load(
+            {"backend": {"ollama_host": "http://10.0.0.5:11434"}},
+            env={"OLLAMA_HOST": "http://192.168.1.50:11434"},
+        )
+
+        self.assertEqual(result.backend.ollama_host, "http://192.168.1.50:11434")
+
 
 if __name__ == "__main__":
     unittest.main()
