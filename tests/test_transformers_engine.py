@@ -7,12 +7,12 @@ from config import BackendConfig, Config, ModelConfig
 from engines.transformers_engine import TransformersEngine, scan_local_cache
 
 
-def _make_config(quantization="none", model_id="test-model"):
+def _make_config(quantization="none", model_id="test-model", gpu="0"):
     return Config(
         backend=BackendConfig(
             host="127.0.0.1",
             port=8000,
-            gpu="0",
+            gpu=gpu,
             engine="transformers",
             ollama_host="http://127.0.0.1:11434",
         ),
@@ -30,8 +30,8 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
     passed to from_pretrained() per quantization setting, without loading
     a real model or requiring bitsandbytes/a GPU."""
 
-    def _load(self, quantization):
-        engine = TransformersEngine(_make_config(quantization=quantization))
+    def _load(self, quantization, gpu="0"):
+        engine = TransformersEngine(_make_config(quantization=quantization, gpu=gpu))
         with mock.patch(
             "engines.transformers_engine.AutoTokenizer.from_pretrained"
         ), mock.patch(
@@ -41,7 +41,7 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
             engine.load_model()
         return mocked_model
 
-    def test_none_quantization_uses_fp16_unchanged(self):
+    def test_none_quantization_uses_auto_device_map(self):
         mocked_model = self._load("none")
 
         _, kwargs = mocked_model.call_args
@@ -66,6 +66,22 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
         self.assertNotIn("torch_dtype", kwargs)
         quant_config = kwargs["quantization_config"]
         self.assertTrue(quant_config.load_in_8bit)
+
+    def test_single_gpu_quantized_load_pins_device_map_not_auto(self):
+        """Regression test: live on UBI, device_map="auto" mis-sized a
+        4-bit load against the model's unquantized footprint and
+        offloaded layers to CPU, which bitsandbytes then refused."""
+        for quantization in ("4bit", "8bit"):
+            with self.subTest(quantization=quantization):
+                mocked_model = self._load(quantization, gpu="0")
+                _, kwargs = mocked_model.call_args
+                self.assertEqual(kwargs.get("device_map"), {"": 0})
+
+    def test_multi_gpu_quantized_load_keeps_auto_device_map(self):
+        mocked_model = self._load("4bit", gpu="0,1,2,3")
+
+        _, kwargs = mocked_model.call_args
+        self.assertEqual(kwargs.get("device_map"), "auto")
 
     def test_load_model_is_a_no_op_once_already_loaded(self):
         engine = TransformersEngine(_make_config(quantization="none"))

@@ -195,9 +195,20 @@
   other users' data in `/home` this account can't clean up). Switched to
   `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk margin) —
   more recent than Qwen2.5, well-established `transformers` support
-  unlike Gemma 4's brand-new MoE architecture. Still needed: `pip install
-  -U transformers accelerate` on UBI, then confirm `./backend start`,
-  `/health`, `/v1/chat/completions`.
+  unlike Gemma 4's brand-new MoE architecture. Two further real bugs hit
+  and fixed during this same live validation: a broken/mismatched
+  `torchvision` leftover in UBI's env crashed `transformers`' import
+  chain (fixed: uninstalled it, not a real dependency for text-only
+  inference); `device_map="auto"` mis-sized a single-GPU 4-bit load
+  against the model's unquantized footprint versus real free VRAM
+  (shared with another user's concurrent training job across all 4
+  GPUs) and tried to CPU-offload part of the model, which bitsandbytes
+  refused — fixed with a new `_device_map()` helper in
+  `engines/transformers_engine.py` that pins `device_map={"": 0}` for
+  single-GPU quantized loads specifically, with regression tests in
+  `tests/test_transformers_engine.py`. See `docs/quantization-design.md`'s
+  amendment log for full detail. Still needed: retry `./backend restart`
+  on UBI with this fix and confirm `/health`, `/v1/chat/completions`.
 - Future: multi-GPU. UBI actually has **4x RTX A4000** (64GB combined
   VRAM), not 1 — discovered 2026-07-30, not yet used.
   `TransformersEngine.load_model()` already calls `device_map="auto"`

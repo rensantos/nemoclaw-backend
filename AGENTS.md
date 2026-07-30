@@ -286,8 +286,20 @@ its ~52GB bf16 download wouldn't have fit UBI's real ~32GB free disk
 clean up — quantization only shrinks VRAM at load time, not the
 download). `config/config.yaml`'s `model.id`/`model.available` now
 point at `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk
-and VRAM margin) instead. Still needed on UBI: `pip install -U
-transformers accelerate`, then `./backend restart`.
+and VRAM margin) instead.
+
+Two more real bugs found and fixed via this live validation, both in
+`docs/quantization-design.md`'s amendment log: (1) UBI's environment had
+a broken/mismatched `torchvision` (leftover, not a declared dependency)
+that crashed `transformers` 4.57.6's import chain — fixed by uninstalling
+it, since text-only inference never needed it. (2) `device_map="auto"`
+mis-sized a single-GPU 4-bit load against the model's *unquantized*
+footprint against real free VRAM (UBI has 4 GPUs shared with another
+user's concurrent training job) and tried to CPU-offload part of the
+model, which bitsandbytes refused — fixed by pinning
+`device_map={"": 0}` for single-GPU quantized loads specifically (new
+`_device_map()` helper, `engines/transformers_engine.py`). Still needed
+on UBI: retry `./backend restart` with this fix.
 
 Discovered while investigating disk space: UBI actually has **4x RTX
 A4000** (64GB combined VRAM), not 1. Not yet used —

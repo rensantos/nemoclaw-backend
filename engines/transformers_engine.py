@@ -31,6 +31,33 @@ def _quantization_load_kwargs(quantization: str) -> dict:
     return {"torch_dtype": torch.float16}
 
 
+def _device_map(config: Config):
+    """Chooses the from_pretrained() device_map.
+
+    Single-GPU quantized loads pin directly to the one visible device
+    (device_map={"": 0}) instead of "auto": observed live on UBI,
+    accelerate's automatic device-map planning sized against the model's
+    *unquantized* footprint, decided it didn't fit the physically free
+    VRAM, and offloaded some layers to CPU - which bitsandbytes' 4-bit
+    loader then refuses ("Some modules are dispatched on the CPU or the
+    disk", docs/quantization-design.md). CUDA_VISIBLE_DEVICES already
+    restricts this process to exactly config.backend.gpu's device(s), so
+    a single configured GPU is always local index 0 regardless of its
+    real system index - pinning there sidesteps the bad estimate
+    entirely, since a quantized model that needs pinning at all is, by
+    definition, meant to fit on one GPU.
+
+    "none" quantization and multi-GPU configurations keep "auto": fp16
+    may still need it to shard a large model across multiple visible
+    GPUs, and multi-GPU quantized sharding is unimplemented/future work
+    (docs/future-tasks.md's Multi-GPU entry).
+    """
+    gpu_indices = str(config.backend.gpu).split(",")
+    if config.model.quantization != "none" and len(gpu_indices) == 1:
+        return {"": 0}
+    return "auto"
+
+
 def scan_local_cache() -> Dict[str, object]:
     """Read-only scan of the local Hugging Face cache: which model repos
     are actually downloaded on this machine right now.
@@ -73,7 +100,7 @@ class TransformersEngine(InferenceEngine):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
-            device_map="auto",
+            device_map=_device_map(self.config),
             **_quantization_load_kwargs(self.config.model.quantization),
         )
         self.model.eval()

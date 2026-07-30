@@ -67,9 +67,26 @@ well-established HF integration — not a custom quantization path.
   is redundant and a known source of confusing warnings from
   `transformers`). When `quantization` is `"none"`, behavior is exactly
   today's: `torch_dtype=torch.float16`, no `quantization_config`.
-- `device_map="auto"` is unchanged and used in all three cases — it was
-  already required for multi-shard fp16 loads and is also required by
-  bitsandbytes.
+- **Amended after live validation on UBI (2026-07-30):** `device_map="auto"`
+  is **not** used unconditionally for all three cases as originally
+  written here. Live testing hit a real failure: `accelerate`'s automatic
+  device-map planning sized a 4-bit load against the model's
+  *unquantized* footprint, decided it didn't fit the physically free
+  VRAM (shared with another user's concurrent job on the same GPU), and
+  offloaded some layers to CPU — which bitsandbytes' 4-bit loader then
+  refuses ("Some modules are dispatched on the CPU or the disk"). Fix:
+  when quantization is `"4bit"`/`"8bit"` **and** exactly one GPU is
+  configured (`backend.gpu` has no comma), pin
+  `device_map={"": 0}` instead — `CUDA_VISIBLE_DEVICES` already
+  restricts the process to that one device, so local index `0` is always
+  correct regardless of the real system GPU index, and a quantized model
+  needing pinning at all is by definition meant to fit on one GPU.
+  `"none"` quantization and multi-GPU configurations still use `"auto"`:
+  fp16 may need it to shard a large model, and multi-GPU quantized
+  sharding is unimplemented/future work (`docs/future-tasks.md`'s
+  Multi-GPU entry). See `_device_map()` in
+  `engines/transformers_engine.py` and
+  `tests/test_transformers_engine.py`'s regression tests.
 
 ## 4. Non-goals
 
