@@ -7,13 +7,18 @@ backend:
   engine: transformers
 
 model:
-  id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  id: google/gemma-4-26B-A4B-it
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
   # (see docs/quantization-design.md). Requires bitsandbytes installed.
-  quantization: none
+  quantization: 4bit
   available:
+    - id: google/gemma-4-26B-A4B-it
+      name: Gemma 4 26B MoE (4-bit)
+      path: google/gemma-4-26B-A4B-it
+      engine: transformers
+      device: cuda
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       name: TinyLlama 1.1B Chat
       path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
