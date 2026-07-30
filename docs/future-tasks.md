@@ -158,6 +158,15 @@
   advertising the enabled engine and hardware traits per node;
   `docs/registration-schema.json` remains authoritative and unchanged
   until that phase.
+  **Trigger condition now met** (2026-07-30): the Local Node (real Ollama,
+  Increments 1-4) and the UBI Node are both live and validated — a real
+  second Backend Node exists. Concrete motivating use case from the
+  frontend side: the user wants their frontend (`nemoclaw-research-assistant`)
+  to let the end user pick, per request, which node/model to use (Local
+  Ollama vs UBI) instead of a static `.env`/`NEMOCLAW_LLM_PROVIDER` choice
+  requiring a restart. This is exactly the "how does Core/a frontend
+  discover and choose among Backend Nodes" question the Registry exists
+  to answer. Not started — recorded here as a real trigger, not a design.
 
 ## OpenAICompatibleEngine / Remote API Node (future)
 
