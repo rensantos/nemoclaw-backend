@@ -167,6 +167,13 @@
   requiring a restart. This is exactly the "how does Core/a frontend
   discover and choose among Backend Nodes" question the Registry exists
   to answer. Not started — recorded here as a real trigger, not a design.
+  **Constraint noted by the user (2026-07-30):** reaching the UBI Node
+  today requires both an SSH connection to the UBI machine and valid UBI
+  account credentials (the backend binds `127.0.0.1` only, no auth of its
+  own — see the SSH tunnel note in `AGENTS.md`'s Current State). Any
+  future automatic Local-vs-UBI selection is not a same-machine HTTP
+  choice like Local-vs-Remote-API-Node would be; it needs to account for
+  who already has UBI SSH access, not just which base_url to call.
 
 ## TransformersEngine Quantization (per docs/quantization-design.md)
 
