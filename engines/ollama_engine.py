@@ -1,4 +1,4 @@
-"""OllamaEngine (docs/ollama-engine-design.md Increments 2-3).
+"""OllamaEngine (docs/ollama-engine-design.md Increments 2-4).
 
 Increment 2 (read paths): load_model()/health()/list_models() against a
 live Ollama daemon's GET /api/tags. No pulling: load_model() only confirms
@@ -7,8 +7,11 @@ the configured tag is already present locally (Section 5, Non-goals).
 Increment 3: chat()/generate_text() against POST /api/chat and
 POST /api/generate, including Section 1's model-resolution decision
 (reject a mismatched requested model, never silently substitute) and
-Section 4's token-usage mapping. unload_model() remains unimplemented
-until Increment 4.
+Section 4's token-usage mapping.
+
+Increment 4: unload_model(), the keep_alive: 0 mapping. Exists as a tested
+engine method only - not wired to any live endpoint (Section 5, Non-goals:
+/admin/model/* stays a 501 stub regardless of engine).
 """
 
 import json
@@ -21,12 +24,6 @@ from typing import List, Optional
 from engines.base import EngineUnavailableError, InferenceEngine, ModelNotFoundError
 from services.gpu import GPUManager
 
-
-_NOT_IMPLEMENTED = (
-    "OllamaEngine.{method}() is not implemented yet. See "
-    "docs/ollama-engine-design.md Section 6 for the increment that "
-    "implements it."
-)
 
 _TAGS_TIMEOUT_SECONDS = 5
 
@@ -61,7 +58,15 @@ class OllamaEngine(InferenceEngine):
             )
 
     def unload_model(self) -> None:
-        raise NotImplementedError(_NOT_IMPLEMENTED.format(method="unload_model"))
+        """Best-effort: asks the daemon to evict the model from memory.
+
+        Does not stop or supervise the daemon process itself, and eviction
+        is not guaranteed to be synchronous from the daemon's side (Section
+        4: "the daemon process itself is not stopped or supervised by the
+        backend — only the model's residency in daemon memory is
+        affected").
+        """
+        self._post("/api/generate", {"model": self.model_id, "keep_alive": 0})
 
     def health(self):
         cuda, gpu = self._gpu_snapshot()

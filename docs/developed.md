@@ -173,6 +173,14 @@ Hugging Face Transformers causal language model on the UBI machine.
   `qwen3` can return empty `content` if the token budget is exhausted by
   hidden "thinking" before an answer — confirmed as an honest pass-through
   of the daemon's real response, not an engine defect.
+- OllamaEngine Increment 4 (`unload_model()`): posts `POST /api/generate`
+  with `{"model": <configured tag>, "keep_alive": 0}`. Best-effort, per
+  the design's own framing — the backend doesn't stop or supervise the
+  daemon; live testing confirmed the real daemon's `GET /api/ps` can lag
+  a few seconds after the call returns before actually clearing the
+  model. Not wired to any live endpoint: `/admin/model/unload` stays a
+  `501` stub for every engine. This completes `OllamaEngine`'s
+  implementation of every `InferenceEngine` method.
 
 ## Configuration
 

@@ -110,9 +110,19 @@
   Section 1's optional additive field for "tolerated mismatch" cases has
   no code path that would ever populate it in the single-active-engine
   design, so it was skipped rather than added unused.
-- Increment 4 (next): `OllamaEngine.unload_model()` (`keep_alive: 0`
-  mapping), tested as an engine method only — not wired to any live
-  endpoint.
+- Increment 4 (done): `OllamaEngine.unload_model()` posts
+  `POST /api/generate` with `{"model": <configured tag>, "keep_alive":
+  0}`. Best-effort: the backend does not stop or supervise the daemon
+  process. Unit test with a mocked response asserting the exact request
+  payload; live-validated against a real Ollama daemon — loaded the model
+  via a real request, confirmed it in `GET /api/ps`, called
+  `unload_model()`, confirmed `GET /api/ps` cleared it (with a few
+  seconds' lag before the daemon's own eviction actually completed — not
+  synchronous, matches the design's "best-effort" framing). Tested as an
+  engine method only, not wired to any live endpoint: `/admin/model/unload`
+  stays a `501` stub for every engine. This completes `OllamaEngine`'s
+  implementation of every `InferenceEngine` method (Increments 1-4 all
+  done); Increment 5 (openapi amendments) landed alongside Increment 3.
 - Increment 5 (done, landed with Increment 3): the
   `openapi/backend-node.openapi.yaml` amendments this design requires.
   `/health` status-value widening had already landed ahead of Increment 2,

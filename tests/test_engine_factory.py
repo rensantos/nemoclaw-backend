@@ -154,11 +154,23 @@ class OllamaEngineReadPathTests(unittest.TestCase):
         self.assertEqual(result["data"][0]["id"], "qwen3:1.7b")
         self.assertEqual(result["data"][0]["owned_by"], "ollama")
 
-    def test_unload_model_still_raises_not_implemented(self):
+    def test_unload_model_sends_keep_alive_zero(self):
+        engine = self._engine(model_id="qwen3:1.7b")
+
+        with self._mock_urlopen({"done": True}) as mocked_urlopen:
+            engine.unload_model()  # must not raise
+
+        request = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/generate")
+        sent = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(sent, {"model": "qwen3:1.7b", "keep_alive": 0})
+
+    def test_unload_model_raises_engine_unavailable_when_daemon_unreachable(self):
         engine = self._engine()
 
-        with self.assertRaises(NotImplementedError):
-            engine.unload_model()
+        with self._mock_urlopen(raise_url_error=True):
+            with self.assertRaises(EngineUnavailableError):
+                engine.unload_model()
 
 
 def _message(role, content):

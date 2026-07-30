@@ -245,10 +245,32 @@ against a real Local Node and real Ollama models):
   wired up (undecided by the design doc, left for a future increment if
   needed).
 
+OllamaEngine Increment 4 (`unload_model()`, live-validated against a real
+Local Node):
+
+- `OllamaEngine.unload_model()` posts `POST /api/generate` with
+  `{"model": <configured tag>, "keep_alive": 0}`, asking the daemon to
+  evict the model from memory. Best-effort only: the backend does not
+  stop or supervise the daemon process, and eviction is not guaranteed to
+  be synchronous — live testing showed the real daemon's `GET /api/ps`
+  can still list the model for a few seconds after the unload call
+  returns before it actually clears.
+- Not wired to any live HTTP endpoint (Non-goal, Section 5):
+  `/admin/model/unload` stays a `501` stub regardless of engine, exactly
+  as `TransformersEngine.unload_model()` remains unreferenced today. This
+  completes `OllamaEngine`'s implementation of every `InferenceEngine`
+  method per `docs/ollama-engine-design.md`.
+
+OllamaEngine implementation (Increments 1-4) is now complete: config
+selection, real read paths, real chat/generation, and best-effort unload,
+all live-validated against a real Ollama daemon and real models.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
-behavior, `docs/model-lifecycle-design.md`) and OllamaEngine Increment 4
-(`unload_model()`, `docs/ollama-engine-design.md`) are both open; either
-may be picked up next.
+behavior, `docs/model-lifecycle-design.md`) is open. So is migrating an
+existing Nemoclaw application (e.g. the user's frontend, or the Research
+Assistant per `docs/future-tasks.md`) off calling Ollama directly and onto
+this backend's `/v1/chat/completions`, now that `OllamaEngine` can
+actually serve requests end to end.
 
 ## Commands
 
