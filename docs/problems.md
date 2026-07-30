@@ -66,6 +66,34 @@ assuming it'll load — this bit us twice in one session (Gemma 4, then
 Qwen3) before TinyLlama (Llama architecture, always worked) confirmed the
 real constraint.
 
+**Update (2026-07-30, same session):** architecture support isn't the
+only moving target. `mistralai/Mistral-7B-Instruct-v0.2` — an
+architecture `transformers` 4.36.0 does support — still failed to load:
+
+```
+Exception: data did not match any variant of untagged enum PyPreTokenizerTypeWrapper at line 40 column 3
+```
+
+The model repo's `tokenizer.json` on the Hub was re-saved at some point
+by a newer `tokenizers` library than the old, pinned one here can parse
+— a file-format compatibility problem, independent of whether the model
+*architecture* is old enough. Hub files can be silently updated over
+time even for long-established models. Not yet resolved; candidates for
+next time: try an older/specific revision of the same repo (a commit
+pinned via `revision=` predating the tokenizer.json update), try a
+different repo/quantized mirror of the same model, or accept that this
+old a `tokenizers` pin may be incompatible with most current Hub
+snapshots regardless of architecture age.
+
+**Open strategic question, not yet decided:** given how narrow and
+moving this compatibility window is, it may not be worth continuing to
+fight UBI's `TransformersEngine` for anything beyond what's already
+proven (`TinyLlama`) until the driver gets upgraded by an admin. The
+Local Node (Ollama) has no equivalent constraint and already serves
+modern models (Qwen3, etc.) — see `docs/architecture.md`'s Target
+deployment topology. Revisit this tradeoff explicitly before investing
+more time chasing UBI model compatibility.
+
 ### If reproducing/verifying this
 
 ```bash

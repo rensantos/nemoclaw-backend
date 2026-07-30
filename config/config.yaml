@@ -12,20 +12,19 @@ model:
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
   # (see docs/quantization-design.md). Requires bitsandbytes installed.
+  # On UBI: transformers is pinned to 4.36.0 (see docs/problems.md) -
+  # only architectures that version already supported will load, and even
+  # then, Hub tokenizer.json file-format drift can still break loading
+  # independent of architecture age (see docs/problems.md's Mistral note).
   quantization: none
   available:
-    - id: Qwen/Qwen3-1.7B
-      name: Qwen3 1.7B (fp16)
-      path: Qwen/Qwen3-1.7B
-      engine: transformers
-      device: cuda
-    - id: Qwen/Qwen3-8B
-      name: Qwen3 8B (4-bit)
-      path: Qwen/Qwen3-8B
-      engine: transformers
-      device: cuda
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       name: TinyLlama 1.1B Chat
       path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      engine: transformers
+      device: cuda
+    - id: mistralai/Mistral-7B-Instruct-v0.2
+      name: Mistral 7B Instruct v0.2 (4-bit) - NOT WORKING, tokenizer.json format issue
+      path: mistralai/Mistral-7B-Instruct-v0.2
       engine: transformers
       device: cuda
