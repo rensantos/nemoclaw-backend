@@ -186,15 +186,37 @@
   value. First-ever `TransformersEngine` unit tests
   (`tests/test_transformers_engine.py`), mocking `from_pretrained()` —
   no GPU or `bitsandbytes` install needed to run them.
-- Follow-up (not done): live validation on UBI. `model.id`/
-  `model.quantization` in `config/config.yaml` are already set
-  (`google/gemma-4-26B-A4B-it`, `4bit` — ~13GB weights, real headroom on
-  the RTX A4000's 16GB). Still needed: install `bitsandbytes` in the
-  `llm` conda env (and likely `huggingface-cli login`, since Gemma
-  repos are typically gated), confirm `./backend start`, `/health`, and
-  a real `/v1/chat/completions` call all work. Gemma 4 is very new
-  (April 2026); its `transformers`/`bitsandbytes` MoE-quantization
-  compatibility is unverified until this first real load.
+- Follow-up (in progress): live validation on UBI. First attempt used
+  `google/gemma-4-26B-A4B-it` (4-bit) but hit two real blockers: UBI's
+  `transformers` was too old to recognize `GemmaTokenizer` at all (crash
+  confirmed in `logs/backend.log`), and the actual download (~52GB bf16 —
+  quantization only shrinks VRAM at load time, not the download) didn't
+  fit UBI's real free disk (~32GB of a 908GB disk, 97% used mostly by
+  other users' data in `/home` this account can't clean up). Switched to
+  `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk margin) —
+  more recent than Qwen2.5, well-established `transformers` support
+  unlike Gemma 4's brand-new MoE architecture. Still needed: `pip install
+  -U transformers accelerate` on UBI, then confirm `./backend start`,
+  `/health`, `/v1/chat/completions`.
+- Future: multi-GPU. UBI actually has **4x RTX A4000** (64GB combined
+  VRAM), not 1 — discovered 2026-07-30, not yet used.
+  `TransformersEngine.load_model()` already calls `device_map="auto"`
+  (`accelerate`'s automatic multi-GPU sharding), so this may need only a
+  `config.yaml` change: `backend.gpu` currently holds a single index
+  (`"0"`), which sets `CUDA_VISIBLE_DEVICES=0` and hides the other 3
+  cards from the process entirely. Setting it to a comma-separated list
+  (e.g. `"0,1,2,3"`) should let `device_map="auto"` spread a model across
+  all visible GPUs with no other code change. Known caveat: `GPUManager`
+  (`services/gpu.py`) assumes a single GPU index for
+  `_gpu_by_index()`/`current()`/`gpu_name()`; with a multi-GPU
+  `backend.gpu` value these would stop matching and report degraded
+  info — cosmetic only (CLI/health reporting), does not affect actual
+  model serving via `device_map="auto"`, but would need real thought
+  before shipping if accurate multi-GPU health/status reporting matters.
+  Unlocks running much bigger models without quantization at all (e.g.
+  Qwen3-14B fp16 ≈ 28GB fits in 2 GPUs' 32GB combined) — deliberately not
+  started; sequenced after Qwen3-8B on a single GPU validates the basic
+  pipeline first.
 - Done: local Hugging Face cache discovery
   (`engines.transformers_engine.scan_local_cache()`,
   `./backend model list|current|info`'s new `Cached locally:` line,

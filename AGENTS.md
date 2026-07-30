@@ -276,11 +276,26 @@ new `model.quantization` config (`none` default, `4bit`, `8bit` via
 so UBI's RTX A4000 can serve a larger model than fp16 alone allows
 (~7B was the prior practical ceiling). `none` is unchanged existing
 behavior. First-ever `TransformersEngine` unit tests added
-(`tests/test_transformers_engine.py`). Live validation on UBI (install
-`bitsandbytes`, pick and load a real quantized model) is a follow-up, not
-done yet. `config/config.yaml`'s `model.id`/`model.available` now point
-at `google/gemma-4-26B-A4B-it` (Gemma 4 26B MoE, 4-bit) instead of the
-TinyLlama placeholder.
+(`tests/test_transformers_engine.py`).
+
+Live validation on UBI is in progress (`docs/future-tasks.md` has the
+full detail). First attempt (`google/gemma-4-26B-A4B-it`, 4-bit) failed:
+UBI's `transformers` was too old for `GemmaTokenizer`, and even fixed,
+its ~52GB bf16 download wouldn't have fit UBI's real ~32GB free disk
+(908GB disk, 97% used, mostly other users' data this account can't
+clean up — quantization only shrinks VRAM at load time, not the
+download). `config/config.yaml`'s `model.id`/`model.available` now
+point at `Qwen/Qwen3-8B` (4-bit, ~16GB bf16 download, comfortable disk
+and VRAM margin) instead. Still needed on UBI: `pip install -U
+transformers accelerate`, then `./backend restart`.
+
+Discovered while investigating disk space: UBI actually has **4x RTX
+A4000** (64GB combined VRAM), not 1. Not yet used —
+`TransformersEngine` already calls `device_map="auto"`, so multi-GPU
+sharding may need only a `backend.gpu` config change (comma-separated
+indices instead of one); see `docs/future-tasks.md`'s Multi-GPU entry
+for the plan and `GPUManager` caveat. Deliberately sequenced after
+Qwen3-8B validates on a single GPU first.
 
 Local model cache discovery: new `engines.transformers_engine.
 scan_local_cache()` reads the local Hugging Face cache (read-only, never
