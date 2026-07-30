@@ -7,16 +7,16 @@ backend:
   engine: transformers
 
 model:
-  id: google/gemma-4-26B-A4B-it
+  id: Qwen/Qwen3-8B
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
   # (see docs/quantization-design.md). Requires bitsandbytes installed.
   quantization: 4bit
   available:
-    - id: google/gemma-4-26B-A4B-it
-      name: Gemma 4 26B MoE (4-bit)
-      path: google/gemma-4-26B-A4B-it
+    - id: Qwen/Qwen3-8B
+      name: Qwen3 8B (4-bit)
+      path: Qwen/Qwen3-8B
       engine: transformers
       device: cuda
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
