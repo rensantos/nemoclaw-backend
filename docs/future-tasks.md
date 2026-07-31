@@ -174,6 +174,20 @@
   future automatic Local-vs-UBI selection is not a same-machine HTTP
   choice like Local-vs-Remote-API-Node would be; it needs to account for
   who already has UBI SSH access, not just which base_url to call.
+  **First concrete design pass (2026-07-31), frontend side:** written up
+  in `nemoclaw-research-assistant`'s `NEMOCLAW_SETUP.md` ("Future
+  development: user-facing model/node choice") after actually standing
+  up the UBI Node end to end and manually pointing the frontend at it.
+  Findings that matter for this Registry's eventual schema: a Backend
+  Node needs to advertise *which models it actually has* (UBI had only
+  3 of the frontend's ~10 configured model roles pulled) and *safe
+  per-node resource ceilings* (a context-window setting fine on one node
+  made every request 500 on another, model-size-dependent). Also
+  confirmed live: this repo's OpenAI-compatible surface has no
+  embeddings endpoint, which matters if a Registry-aware frontend
+  expects every node to serve every capability a node might be asked
+  for — some capabilities (embeddings, today) only exist on the
+  native-Ollama path, not through this backend at all.
 
 ## TransformersEngine Quantization (per docs/quantization-design.md)
 
