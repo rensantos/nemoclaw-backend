@@ -186,8 +186,9 @@ against UBI's specific GGUF file):
 |---|---|---|
 | `qwen3` (32b/8b/1.7b) | 40,960 | on UBI |
 | `gemma3` (4b) | 131,072 | on UBI |
+| `llama3.2` (3b) | 131,072 | on UBI |
+| `llama3.2-vision` (11b) | 131,072 | on UBI |
 | `llama3.1` | 131,072 | HF config |
-| `llama3.2` | 131,072 | HF config |
 | `deepseek-r1` (Llama-8B distill) | 131,072 | HF config |
 | `hermes3` | 131,072 | HF config (Llama-3.1 base) |
 | `mistral` (v0.3) | 32,768 | HF config |
@@ -197,7 +198,28 @@ against UBI's specific GGUF file):
 | `command-r` | ~128,000 | publicly documented; HF config is gated, couldn't fetch |
 | `gemma4` | unknown | couldn't pull at all |
 
-**Disk state after this exploration:** `qwen3:8b`/`qwen3:1.7b` were
-deleted to make room for the (ultimately blocked) `gemma4` attempt, then
-`gemma3:4b` (3.3GB) was pulled instead. UBI had ~3GB free at the end of
-this session's testing - check `df -h` before pulling anything else.
+## Update 2026-08-01: live default switched to llama3.2-vision:11b
+
+`qwen3:32b`'s native context (40,960) is far short of the `~131K` several
+other confirmed-working families offer, so it was replaced. `llama3.2`
+also has a separate multimodal sibling, `llama3.2-vision` (11b, 90b) -
+`90b` is 54.6GB, infeasible on UBI's disk regardless of anything else,
+but **`11b` (7.8GB) pulled successfully and works** - not blocked the
+way `gemma4` was, likely because it uses Meta's own `mllama`
+architecture rather than whatever newer generic multimodal engine
+`gemma4` needs. Text-only use (the only thing tested/needed here) works
+cleanly: coherent output, **all 41/41 layers on a single GPU** (~12.1GB,
+notably lighter than `qwen3:32b` needing 2+ GPUs), 131,072 context
+confirmed via its own metadata.
+
+`model.id` is now `llama3.2-vision:11b`, live-validated via `/health`,
+`/v1/models`, and a real `/v1/chat/completions` call. All previously
+pulled models (`qwen3:32b`, `gemma3:4b`, `llama3.2:3b`) were deleted to
+make room during this exploration and are not currently pulled - all
+remain validated options, listed in `config/config.yaml`'s
+`model.available` for exactly that reason.
+
+**Disk state after this exploration:** UBI had ~18GB free after
+`llama3.2-vision:11b` was pulled (started this update from ~24GB free
+after deleting every other model) - check `df -h` before pulling
+anything else on this shared box.

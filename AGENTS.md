@@ -543,6 +543,24 @@ after deleting `qwen3:8b`/`qwen3:1.7b` to test the (blocked) `gemma4`
 pull, then pulling `gemma3:4b` instead - check `df -h` before pulling
 anything else.
 
+Live default switched to llama3.2-vision:11b (2026-08-01): `qwen3:32b`'s
+native context (40,960) was far short of the ~131K several other
+confirmed-working families offer (`docs/ollama-on-ubi-design.md`).
+`llama3.2-vision:11b` (7.8GB, Meta's `mllama` multimodal architecture)
+pulled successfully and works for text-only use - unlike `gemma4`, not
+blocked by the newer-engine version gate, likely because `mllama`
+predates whatever generic multimodal support `gemma4` needs. Loads
+**fully GPU-resident on a single GPU** (41/41 layers, ~12.1GB) - lighter
+than `qwen3:32b` needing 2+ GPUs. `llama3.2-vision:90b` (54.6GB) is
+infeasible on UBI's disk regardless of the version gate. `model.id` is
+now `llama3.2-vision:11b`, live-validated via `/health`, `/v1/models`,
+a real `/v1/chat/completions` call, and the full test suite (141 tests,
+all passing). All previously pulled models (`qwen3:32b`, `gemma3:4b`,
+`llama3.2:3b`) were deleted to free disk during this exploration and
+are no longer pulled, but remain validated options in
+`config/config.yaml`'s `model.available`. UBI disk: ~18GB free after
+this pull.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second
