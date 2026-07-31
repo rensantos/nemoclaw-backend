@@ -144,3 +144,60 @@ anything else, and know that `30b-a3b` is validated-but-not-currently-
 pulled, listed in `config/config.yaml`'s `model.available` for exactly
 that reason (repull with a plain `ollama pull qwen3:30b-a3b` if wanted,
 but something else likely needs to be deleted first to make room).
+
+## Update 2026-07-31 (same day): model family compatibility + native context windows
+
+`qwen3`'s native context window (`qwen3.context_length` in its own GGUF
+metadata, checked via `ollama show`/`/api/show`) is **40960** tokens -
+not the huge number `config.yaml`'s `model.think_default` investigation
+briefly tried before finding out. This is an architectural ceiling, not
+a memory/config one: requesting more (`n_ctx_per_seq > n_ctx_train`)
+produces a real warning in the daemon log and degraded output, not just
+higher memory cost - see `NEMOCLAW_SETUP.md` in
+`nemoclaw-research-assistant` for the fuller memory-cost investigation
+this same session that this finding grew out of.
+
+**Which model families does this pinned Ollama (`v0.9.2`) actually
+support?** Tested by attempting a real pull for each (the version-gate
+check happens at the manifest stage, before any weight download, so
+this is cheap even without fully downloading each one):
+
+| Family | Pull result |
+|---|---|
+| `qwen3` | works (already deployed) |
+| `gemma3` | works - pulled `gemma3:4b` fully, loaded, generated coherently |
+| `llama3.1`, `llama3.2`, `mistral`, `deepseek-r1`, `phi4`, `codellama`, `qwen2.5`, `command-r`, `hermes3` | passed the manifest/version check (real download started); not individually pulled fully or load-tested this session |
+| `gemma4` | **blocked** - `412: requires a newer version of Ollama`. Its manifest shows a vision projector layer (`mmproj-gemma-4-12B-it-bf16.gguf`) - it's multimodal, needing Ollama's newer engine this pinned version doesn't have. Same category of wall as the `transformers`/Qwen3 story (`docs/problems.md`), just on Ollama's side this time. |
+
+**Also confirmed working this session:** `ollama pull hf.co/<repo>:<quant>`
+pulls GGUF files directly from Hugging Face, not just Ollama's own
+curated library - tested against `bartowski/Qwen2.5-7B-Instruct-GGUF`,
+real download at ~100MB/s, no version block. Opens up any GGUF
+quantization published on HF, not just the ~100 models Ollama curates,
+as long as the architecture doesn't need the newer multimodal engine.
+
+**Native context windows** - `qwen3` and `gemma3:4b` verified directly
+via UBI's own pulled copies (`/api/show`); the rest are the base
+architecture's published HuggingFace `config.json` value (same
+underlying models Ollama packages, not independently re-verified
+against UBI's specific GGUF file):
+
+| Model | Native context | Verified how |
+|---|---|---|
+| `qwen3` (32b/8b/1.7b) | 40,960 | on UBI |
+| `gemma3` (4b) | 131,072 | on UBI |
+| `llama3.1` | 131,072 | HF config |
+| `llama3.2` | 131,072 | HF config |
+| `deepseek-r1` (Llama-8B distill) | 131,072 | HF config |
+| `hermes3` | 131,072 | HF config (Llama-3.1 base) |
+| `mistral` (v0.3) | 32,768 | HF config |
+| `qwen2.5` | 32,768 | HF config |
+| `phi4` | 16,384 | HF config |
+| `codellama` | 16,384 | HF config |
+| `command-r` | ~128,000 | publicly documented; HF config is gated, couldn't fetch |
+| `gemma4` | unknown | couldn't pull at all |
+
+**Disk state after this exploration:** `qwen3:8b`/`qwen3:1.7b` were
+deleted to make room for the (ultimately blocked) `gemma4` attempt, then
+`gemma3:4b` (3.3GB) was pulled instead. UBI had ~3GB free at the end of
+this session's testing - check `df -h` before pulling anything else.

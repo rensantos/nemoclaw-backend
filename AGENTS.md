@@ -517,6 +517,32 @@ surfaced the original truncation) now returns a complete, coherent
 response with the default 80-token budget instead of an empty/cut-off
 one.
 
+Model family compatibility + context windows (2026-07-31, same day):
+found live that `qwen3`'s native context is only 40,960 tokens (its own
+GGUF metadata), an architectural ceiling, not a memory one - motivated
+checking what else this pinned Ollama (`v0.9.2`) can actually run.
+Confirmed via real pull attempts (the version gate fires at the
+manifest stage, before downloading weights, so this is cheap):
+`llama3.1`, `llama3.2`, `mistral`, `deepseek-r1`, `phi4`, `gemma3`,
+`codellama`, `qwen2.5`, `command-r`, `hermes3` all pass. `gemma4` is
+**blocked** - `412: requires a newer version of Ollama`, because it's
+multimodal (ships a vision projector) and needs Ollama's newer engine,
+same category of wall as the `transformers`/Qwen3 story just from
+Ollama's side. `gemma3:4b` pulled and load-tested fully (coherent
+output); the rest passed the pull check but weren't individually load-
+tested. Also confirmed: `ollama pull hf.co/<repo>:<quant>` pulls GGUF
+files directly from Hugging Face, not just Ollama's curated library -
+real download confirmed against a Qwen2.5 GGUF repo, no version block.
+Native context windows (`gemma3`/`llama3.1`/`llama3.2`/`deepseek-r1`/
+`hermes3` all ~131K, `mistral`/`qwen2.5` 32,768, `phi4`/`codellama`
+16,384) recorded in `docs/ollama-on-ubi-design.md`'s latest update -
+`qwen3` and `gemma3:4b` verified directly on UBI, the rest from each
+model's published HuggingFace config (not independently re-verified
+against UBI's specific GGUF). Disk ended this session at ~3GB free
+after deleting `qwen3:8b`/`qwen3:1.7b` to test the (blocked) `gemma4`
+pull, then pulling `gemma3:4b` instead - check `df -h` before pulling
+anything else.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second
