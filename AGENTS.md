@@ -341,6 +341,32 @@ occupied by another user's job) — `backend.gpu` moved from `0` to `2`
 (the idle card) to accommodate. Not fixed: a `bitsandbytes` build
 compatible with `torch==2.0.1+cu117`.
 
+Multi-GPU sharding, first real use (2026-07-31): UBI's other 3 GPUs
+(discovered 2026-07-30, unused until now) got their first live
+exercise. `NousResearch/Meta-Llama-3-8B-Instruct` (ungated Llama-3-8B
+mirror, no revision pin needed, confirmed working under
+`transformers==4.36.0`) has a much larger vocabulary (128k tokens)
+than Llama-2/Mistral (32k), so its fp16 footprint (~16.8GB) doesn't
+fit one 16GB card. No code change was needed —
+`TransformersEngine.load_model()` already called `device_map="auto"`;
+setting `config/config.yaml`'s `backend.gpu: "2,3"` was sufficient,
+and `accelerate` split the model ~7.5GB/~9.2GB across both GPUs with
+no CPU offload. `NousResearch/Meta-Llama-3-8B-Instruct` is now the
+live default on UBI, replacing Mistral-7B, confirmed via `/health`,
+`/v1/models`, and a real `/v1/chat/completions` call. `GPUManager`'s
+known multi-GPU caveat (`docs/future-tasks.md`) is now observed live:
+`./backend status`/`gpu current` show VRAM/temperature as unavailable
+for a comma-separated `backend.gpu`, cosmetic only. All testing and
+deployment this session stayed on GPU 2/3 — GPU 0/1 (another user's
+concurrent training job) were deliberately never touched, checked via
+`nvidia-smi` before and after each step. Found the same session: the
+real ceiling on "how big a model" isn't VRAM, it's disk — this box's
+single volume is ~97-99% used by other users' data (13-28GB free
+depending what's locally cached), and a 70B-class model needs ~140GB
+for fp16 weights alone regardless of combined GPU VRAM. Practical
+ceiling is roughly the 13B-34B range (Llama-family) until disk
+changes.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second

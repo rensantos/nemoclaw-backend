@@ -130,10 +130,49 @@ session's results:** given how narrow and moving UBI's compatibility
 window looked, it was unclear whether continuing to chase
 `TransformersEngine` compatibility here was worth it versus leaning on
 the Local Node (Ollama). This session's outcome: the window is narrow
-but tractable — both Llama-2-7B and Mistral-7B (revision-pinned) now
-load and serve correctly, and `mistralai/Mistral-7B-Instruct-v0.2` is
-the new live default on UBI. Worth continuing to invest here, at least
-until the bitsandbytes/VRAM constraint above becomes limiting again.
+but tractable — Llama-2-7B, Mistral-7B (revision-pinned), and
+Llama-3-8B (see below) all load and serve correctly. Worth continuing
+to invest here, at least until the bitsandbytes/VRAM constraint above
+becomes limiting again.
+
+**Multi-GPU sharding confirmed working, and needed for Llama-3
+(2026-07-31):** `NousResearch/Meta-Llama-3-8B-Instruct` (ungated
+mirror, April 2024, no revision pin needed) loads under the pinned
+`transformers==4.36.0` — but not on one GPU: its fp16 weights come
+within a few hundred MiB of a full 16GB card because Llama-3's
+vocabulary (128k tokens) is ~4x Llama-2/Mistral's (32k), inflating the
+embedding/lm_head layers well past what "same param count" would
+suggest. A single-GPU pinned probe hit `CUDA out of memory` (tried to
+allocate 112MiB with 14.85GiB already allocated on a 15.74GiB card).
+Retrying with `device_map="auto"` across two visible GPUs (via
+`CUDA_VISIBLE_DEVICES=2,3`) worked cleanly — `accelerate` split it
+~7.5GB/~9.2GB across the two cards, no CPU offload, no errors. This
+is the first real (non-mocked) exercise of the multi-GPU path
+described in `docs/future-tasks.md`'s Multi-GPU entry; no code change
+was needed; `backend.gpu: "2,3"` in `config/config.yaml` was
+sufficient. **Caveat confirmed live, not just theoretical:**
+`GPUManager` (`services/gpu.py`) matches `backend.gpu` against a
+single `nvidia-smi` index, so with a comma-separated value `./backend
+status`/`gpu current` now show VRAM and temperature as unavailable —
+cosmetic only, `/health` (which reads `torch.cuda.get_device_name(0)`
+directly, not through `GPUManager`) and actual inference are both
+unaffected.
+
+`NousResearch/Meta-Llama-3-8B-Instruct` (2 GPUs) is now the live
+default on UBI, confirmed via `/health`, `/v1/models`, and a real
+`/v1/chat/completions` call. All testing and deployment this session
+stayed on GPU 2/3 only — GPU 0/1 (the other user's concurrent job)
+were never touched, verified via `nvidia-smi` before and after each
+step.
+
+**Ceiling for "bigger," independent of VRAM:** disk. This box's single
+908GB volume is ~97-99% used by other users' data throughout this
+session (13-28GB free depending on what's cached locally at any given
+moment). A 70B-class model needs ~140GB just for fp16 weights — that
+does not fit regardless of how many of the 4 GPUs' combined 64GB VRAM
+are available. The practical "go bigger" ceiling on this machine is
+roughly the 13B-34B range (Llama-2-13B ≈ 26GB, still Llama-family),
+not larger, until disk changes.
 
 ### If reproducing/verifying this
 

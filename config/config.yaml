@@ -2,14 +2,21 @@ backend:
   host: 127.0.0.1
   port: 8000
   # GPU 0/1 are frequently occupied by another user's job on this shared
-  # box (docs/problems.md); GPU 2 is the idle card this config targets.
-  gpu: 2
+  # box (docs/problems.md). GPU 2+3 are the idle cards this config
+  # targets; a comma-separated list here lets device_map="auto" (fp16
+  # only - see model.quantization below) shard a model that doesn't fit
+  # a single 16GB card across both. Known caveat: GPUManager
+  # (services/gpu.py) matches this value against a single nvidia-smi GPU
+  # index, so a multi-GPU value here makes ./backend status/gpu current
+  # report VRAM/temperature as unavailable - cosmetic only, does not
+  # affect actual model serving (docs/future-tasks.md's Multi-GPU entry).
+  gpu: "2,3"
   # Which InferenceEngine implementation serves requests.
   # Valid values: transformers | ollama (see docs/ollama-engine-design.md)
   engine: transformers
 
 model:
-  id: mistralai/Mistral-7B-Instruct-v0.2
+  id: NousResearch/Meta-Llama-3-8B-Instruct
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
@@ -22,11 +29,12 @@ model:
   # here (torch.library.impl_abstract missing under pinned torch 2.0.1) -
   # kept at "none" until that's fixed.
   quantization: none
-  # Pins the Hub commit this repo loads from. mistralai/Mistral-7B-Instruct-v0.2's
-  # `main` tokenizer.json was re-saved by a newer `tokenizers` library than
-  # UBI's pinned transformers==4.36.0 can parse (docs/problems.md). This
-  # revision predates that re-save and is confirmed loadable.
-  revision: dca6e4b60aca009ed25ffa70c9bb65e46960a573
+  # No revision pin needed: NousResearch/Meta-Llama-3-8B-Instruct loads
+  # cleanly at `main` under the pinned transformers==4.36.0 (confirmed
+  # 2026-07-31). Llama-3's much larger vocabulary (128k vs Llama-2/
+  # Mistral's 32k) makes its fp16 footprint exceed one 16GB card with no
+  # headroom to spare - hence backend.gpu above spans two GPUs.
+  revision: ""
   available:
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       name: TinyLlama 1.1B Chat
@@ -34,7 +42,12 @@ model:
       engine: transformers
       device: cuda
     - id: mistralai/Mistral-7B-Instruct-v0.2
-      name: Mistral 7B Instruct v0.2 (revision-pinned, see model.revision)
+      name: Mistral 7B Instruct v0.2 (needs model.revision dca6e4b6, see docs/problems.md)
       path: mistralai/Mistral-7B-Instruct-v0.2
+      engine: transformers
+      device: cuda
+    - id: NousResearch/Meta-Llama-3-8B-Instruct
+      name: Llama 3 8B Instruct (needs 2 GPUs, see backend.gpu)
+      path: NousResearch/Meta-Llama-3-8B-Instruct
       engine: transformers
       device: cuda

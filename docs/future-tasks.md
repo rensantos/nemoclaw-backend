@@ -234,25 +234,33 @@
   compatible with `torch==2.0.1+cu117` so 4-bit/8-bit quantization
   actually works on UBI, which would remove the VRAM/GPU-choice
   constraint above.
-- Future: multi-GPU. UBI actually has **4x RTX A4000** (64GB combined
-  VRAM), not 1 — discovered 2026-07-30, not yet used.
-  `TransformersEngine.load_model()` already calls `device_map="auto"`
-  (`accelerate`'s automatic multi-GPU sharding), so this may need only a
-  `config.yaml` change: `backend.gpu` currently holds a single index
-  (`"0"`), which sets `CUDA_VISIBLE_DEVICES=0` and hides the other 3
-  cards from the process entirely. Setting it to a comma-separated list
-  (e.g. `"0,1,2,3"`) should let `device_map="auto"` spread a model across
-  all visible GPUs with no other code change. Known caveat: `GPUManager`
-  (`services/gpu.py`) assumes a single GPU index for
-  `_gpu_by_index()`/`current()`/`gpu_name()`; with a multi-GPU
-  `backend.gpu` value these would stop matching and report degraded
-  info — cosmetic only (CLI/health reporting), does not affect actual
-  model serving via `device_map="auto"`, but would need real thought
-  before shipping if accurate multi-GPU health/status reporting matters.
-  Unlocks running much bigger models without quantization at all (e.g.
-  Qwen3-14B fp16 ≈ 28GB fits in 2 GPUs' 32GB combined) — deliberately not
-  started; sequenced after Qwen3-8B on a single GPU validates the basic
-  pipeline first.
+- Done (2026-07-31): multi-GPU, first real use. UBI has **4x RTX A4000**
+  (64GB combined VRAM) — discovered 2026-07-30, confirmed working
+  2026-07-31 with `NousResearch/Meta-Llama-3-8B-Instruct`, whose fp16
+  footprint (~16.8GB - Llama-3's 128k-token vocabulary makes it larger
+  than a same-labeled Llama-2/Mistral 7B) doesn't fit one 16GB card.
+  No code change was needed: `TransformersEngine.load_model()` already
+  called `device_map="auto"`, and setting `config/config.yaml`'s
+  `backend.gpu: "2,3"` (a comma-separated list, exposing 2 visible
+  devices via `CUDA_VISIBLE_DEVICES`) was sufficient - `accelerate`
+  split the model ~7.5GB/~9.2GB across both with no CPU offload,
+  confirmed live via `/health`, `/v1/models`, and a real
+  `/v1/chat/completions` call. The known `GPUManager` caveat below is
+  now observed live, not just theoretical: `./backend status`/`gpu
+  current` show VRAM/temperature as unavailable for this config
+  (`_gpu_by_index()` can't match a multi-index string against a single
+  `nvidia-smi` row) - cosmetic only; `/health` reads
+  `torch.cuda.get_device_name(0)` directly, unaffected, and actual
+  inference is unaffected. Follow-up, not done: fix `GPUManager` to
+  report real per-GPU info for a multi-GPU `backend.gpu` value, if
+  accurate multi-GPU status reporting becomes important enough to
+  justify it.
+  Ceiling found the same session: disk, not VRAM. This box's single
+  908GB volume is ~97-99% used by other users' data (13-28GB free
+  depending on what's cached locally); a 70B-class model needs ~140GB
+  for fp16 weights alone, which doesn't fit regardless of combined GPU
+  VRAM. Practical "go bigger" ceiling is roughly the 13B-34B range
+  (Llama-family) until disk changes.
 - Done: local Hugging Face cache discovery
   (`engines.transformers_engine.scan_local_cache()`,
   `./backend model list|current|info`'s new `Cached locally:` line,
