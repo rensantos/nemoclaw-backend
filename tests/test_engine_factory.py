@@ -12,7 +12,12 @@ from services.inference import InferenceService, _build_engine
 from services.lifecycle import LifecycleState
 
 
-def _make_config(engine, ollama_host="http://127.0.0.1:11434", model_id="test-model"):
+def _make_config(
+    engine,
+    ollama_host="http://127.0.0.1:11434",
+    model_id="test-model",
+    think_default=None,
+):
     return Config(
         backend=BackendConfig(
             host="127.0.0.1",
@@ -27,6 +32,7 @@ def _make_config(engine, ollama_host="http://127.0.0.1:11434", model_id="test-mo
             temperature_default=0.1,
             quantization="none",
             revision="",
+            think_default=think_default,
         ),
     )
 
@@ -187,10 +193,12 @@ class OllamaEngineChatTests(unittest.TestCase):
     """docs/ollama-engine-design.md Increment 3: chat()/generate_text()
     against a (mocked) live Ollama daemon."""
 
-    def _engine(self, model_id="qwen3:1.7b"):
+    def _engine(self, model_id="qwen3:1.7b", think_default=None):
         from engines.ollama_engine import OllamaEngine
 
-        return OllamaEngine(_make_config("ollama", model_id=model_id))
+        return OllamaEngine(
+            _make_config("ollama", model_id=model_id, think_default=think_default)
+        )
 
     def _mock_urlopen(self, payload=None, raise_url_error=False):
         if raise_url_error:
@@ -237,6 +245,36 @@ class OllamaEngineChatTests(unittest.TestCase):
         self.assertEqual(sent["messages"], [{"role": "user", "content": "hi"}])
         self.assertFalse(sent["stream"])
         self.assertEqual(sent["options"], {"temperature": 0.3, "num_predict": 64})
+
+    def test_chat_omits_think_by_default(self):
+        engine = self._engine()
+        payload = {"message": {"content": "hi"}, "prompt_eval_count": 1, "eval_count": 1}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.chat([_message("user", "hi")], None, None)
+
+        sent = json.loads(mocked_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertNotIn("think", sent)
+
+    def test_chat_request_think_overrides_config_default(self):
+        engine = self._engine(think_default=True)
+        payload = {"message": {"content": "hi"}, "prompt_eval_count": 1, "eval_count": 1}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.chat([_message("user", "hi")], None, None, think=False)
+
+        sent = json.loads(mocked_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(sent["think"], False)
+
+    def test_chat_falls_back_to_config_think_default(self):
+        engine = self._engine(think_default=False)
+        payload = {"message": {"content": "hi"}, "prompt_eval_count": 1, "eval_count": 1}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.chat([_message("user", "hi")], None, None)
+
+        sent = json.loads(mocked_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(sent["think"], False)
 
     def test_chat_reports_zero_and_does_not_raise_when_usage_missing(self):
         engine = self._engine()
@@ -302,6 +340,26 @@ class OllamaEngineChatTests(unittest.TestCase):
         sent = json.loads(request.data.decode("utf-8"))
         self.assertEqual(sent["prompt"], "hello")
         self.assertEqual(sent["options"], {"temperature": 0.9, "num_predict": 20})
+
+    def test_generate_text_omits_think_by_default(self):
+        engine = self._engine()
+        payload = {"response": "ok"}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.generate_text("hello", 20, 0.9)
+
+        sent = json.loads(mocked_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertNotIn("think", sent)
+
+    def test_generate_text_request_think_overrides_config_default(self):
+        engine = self._engine(think_default=True)
+        payload = {"response": "ok"}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.generate_text("hello", 20, 0.9, think=False)
+
+        sent = json.loads(mocked_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(sent["think"], False)
 
     def test_generate_text_raises_engine_unavailable_when_daemon_unreachable(self):
         engine = self._engine()

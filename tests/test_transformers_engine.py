@@ -22,6 +22,7 @@ def _make_config(quantization="none", model_id="test-model", gpu="0", revision="
             temperature_default=0.1,
             quantization=quantization,
             revision=revision,
+            think_default=None,
         ),
     )
 

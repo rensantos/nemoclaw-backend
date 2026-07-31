@@ -62,9 +62,16 @@ class InferenceEngine(ABC):
         max_tokens: Optional[int],
         temperature: Optional[float],
         requested_model: Optional[str] = None,
+        think: Optional[bool] = None,
     ):
         pass
 
     @abstractmethod
-    def generate_text(self, prompt: str, max_new_tokens: int, temperature: float):
+    def generate_text(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+        think: Optional[bool] = None,
+    ):
         pass

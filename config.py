@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -21,6 +22,7 @@ DEFAULTS = {
         "temperature_default": 0.7,
         "quantization": "none",
         "revision": "",
+        "think_default": None,
     },
 }
 
@@ -44,6 +46,7 @@ class ModelConfig:
     temperature_default: float
     quantization: str
     revision: str
+    think_default: Optional[bool]
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,20 @@ def _float_env(name: str, fallback) -> float:
     return float(value)
 
 
+def _optional_bool_env(name: str, fallback):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return fallback
+    lowered = value.strip().lower()
+    if lowered in ("true", "1", "yes"):
+        return True
+    if lowered in ("false", "0", "no"):
+        return False
+    raise ValueError(
+        "Invalid {} '{}'; expected a boolean (true/false)".format(name, value)
+    )
+
+
 def load_config() -> Config:
     raw_config = _load_yaml_config()
 
@@ -154,6 +171,9 @@ def load_config() -> Config:
     revision = _env_value(
         "MODEL_REVISION", _section_value(raw_config, "model", "revision")
     )
+    think_default = _optional_bool_env(
+        "MODEL_THINK_DEFAULT", _section_value(raw_config, "model", "think_default")
+    )
 
     return Config(
         backend=BackendConfig(
@@ -165,6 +185,7 @@ def load_config() -> Config:
             temperature_default=temperature_default,
             quantization=quantization,
             revision=revision,
+            think_default=think_default,
         ),
     )
 

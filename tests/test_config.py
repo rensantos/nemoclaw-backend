@@ -101,6 +101,33 @@ class ConfigEngineSelectionTests(unittest.TestCase):
 
         self.assertEqual(result.model.revision, "def456")
 
+    def test_think_default_is_none_when_unset(self):
+        result = self._load({})
+
+        self.assertIsNone(result.model.think_default)
+
+    def test_think_default_reads_yaml_false(self):
+        result = self._load({"model": {"think_default": False}})
+
+        self.assertFalse(result.model.think_default)
+
+    def test_think_default_reads_yaml_true(self):
+        result = self._load({"model": {"think_default": True}})
+
+        self.assertTrue(result.model.think_default)
+
+    def test_think_default_env_override_takes_precedence_over_yaml(self):
+        result = self._load(
+            {"model": {"think_default": True}},
+            env={"MODEL_THINK_DEFAULT": "false"},
+        )
+
+        self.assertFalse(result.model.think_default)
+
+    def test_think_default_invalid_env_value_raises(self):
+        with self.assertRaises(ValueError):
+            self._load({}, env={"MODEL_THINK_DEFAULT": "not-a-bool"})
+
 
 if __name__ == "__main__":
     unittest.main()

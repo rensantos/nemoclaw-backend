@@ -97,6 +97,7 @@ class OllamaEngine(InferenceEngine):
         max_tokens: Optional[int],
         temperature: Optional[float],
         requested_model: Optional[str] = None,
+        think: Optional[bool] = None,
     ):
         self._check_requested_model(requested_model)
         max_new_tokens = (
@@ -110,6 +111,7 @@ class OllamaEngine(InferenceEngine):
             "stream": False,
             "options": {"temperature": temp, "num_predict": max_new_tokens},
         }
+        self._apply_think(payload, think)
         response = self._post("/api/chat", payload)
         content = (response.get("message") or {}).get("content", "")
         prompt_tokens, completion_tokens = self._usage(response)
@@ -121,19 +123,41 @@ class OllamaEngine(InferenceEngine):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    def generate_text(self, prompt: str, max_new_tokens: int, temperature: float):
+    def generate_text(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+        think: Optional[bool] = None,
+    ):
         payload = {
             "model": self.model_id,
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": temperature, "num_predict": max_new_tokens},
         }
+        self._apply_think(payload, think)
         response = self._post("/api/generate", payload)
         return {"model": self.model_id, "response": response.get("response", "")}
 
     def _check_requested_model(self, requested_model: Optional[str]) -> None:
         if requested_model is not None and requested_model != self.model_id:
             raise ModelNotFoundError(requested_model, self.model_id)
+
+    def _apply_think(self, payload: dict, think: Optional[bool]) -> None:
+        """Sets payload["think"] from the request override or
+        config.model.think_default, in that priority order. Ollama's
+        `think` is a top-level request field (not inside "options"). If
+        both resolve to None, the key is omitted entirely so Ollama's own
+        default behavior (reasoning-capable models think unless told
+        otherwise) is unchanged - this is an opt-in knob, not a new
+        default.
+        """
+        effective_think = (
+            self.config.model.think_default if think is None else think
+        )
+        if effective_think is not None:
+            payload["think"] = effective_think
 
     def _usage(self, response: dict):
         prompt_tokens = response.get("prompt_eval_count")

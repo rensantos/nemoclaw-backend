@@ -35,6 +35,15 @@ model:
   id: qwen3:32b
   max_tokens_default: 256
   temperature_default: 0.7
+  # OllamaEngine-only (see engines/ollama_engine.py's _apply_think()).
+  # Qwen3 is a reasoning model - without this, every response spends part
+  # of max_tokens on a <think> trace before the actual answer, which bit
+  # a frontend smoke test with a small max_tokens budget (2026-07-31).
+  # false here means responses skip reasoning by default; a request can
+  # still override with "think": true. null/omitted would leave Ollama's
+  # own per-model default (reasoning-capable models think unless told
+  # otherwise) - see docs/ollama-engine-design.md.
+  think_default: false
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
   # (see docs/quantization-design.md). Requires bitsandbytes installed.
   # On UBI: transformers is pinned to 4.36.0 (see docs/problems.md) -

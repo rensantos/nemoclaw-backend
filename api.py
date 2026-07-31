@@ -34,7 +34,7 @@ def chat_completions(req: ChatCompletionRequest):
     model_id = req.model or settings.model_id
     try:
         result = inference_service.chat(
-            req.messages, req.max_tokens, req.temperature, req.model
+            req.messages, req.max_tokens, req.temperature, req.model, req.think
         )
     except ModelNotFoundError as exc:
         return JSONResponse(
@@ -86,6 +86,7 @@ def generate(req: GenerateRequest):
             req.prompt,
             req.max_new_tokens,
             req.temperature,
+            req.think,
         )
     except EngineUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))

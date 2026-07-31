@@ -27,8 +27,10 @@ class FakeEngine:
         self.calls.append("list_models")
         return {"object": "list", "data": []}
 
-    def chat(self, messages, max_tokens, temperature, requested_model=None):
-        self.calls.append(("chat", messages, max_tokens, temperature, requested_model))
+    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+        self.calls.append(
+            ("chat", messages, max_tokens, temperature, requested_model, think)
+        )
         return {
             "content": "hello",
             "prompt_tokens": 1,
@@ -36,8 +38,8 @@ class FakeEngine:
             "total_tokens": 2,
         }
 
-    def generate_text(self, prompt, max_new_tokens, temperature):
-        self.calls.append(("generate_text", prompt, max_new_tokens, temperature))
+    def generate_text(self, prompt, max_new_tokens, temperature, think=None):
+        self.calls.append(("generate_text", prompt, max_new_tokens, temperature, think))
         return {"model": "fake", "response": prompt}
 
 
@@ -163,7 +165,7 @@ class InferenceServiceTests(unittest.TestCase):
         result = service.chat(["message"], 32, 0.5)
 
         self.assertEqual(result["content"], "hello")
-        self.assertIn(("chat", ["message"], 32, 0.5, None), engine.calls)
+        self.assertIn(("chat", ["message"], 32, 0.5, None, None), engine.calls)
 
     def test_service_delegates_chat_with_requested_model(self):
         engine = FakeEngine()
@@ -171,7 +173,15 @@ class InferenceServiceTests(unittest.TestCase):
 
         service.chat(["message"], 32, 0.5, requested_model="tiny")
 
-        self.assertIn(("chat", ["message"], 32, 0.5, "tiny"), engine.calls)
+        self.assertIn(("chat", ["message"], 32, 0.5, "tiny", None), engine.calls)
+
+    def test_service_delegates_chat_with_think(self):
+        engine = FakeEngine()
+        service = InferenceService(engine)
+
+        service.chat(["message"], 32, 0.5, think=False)
+
+        self.assertIn(("chat", ["message"], 32, 0.5, None, False), engine.calls)
 
     def test_service_delegates_generate_text(self):
         engine = FakeEngine()
@@ -180,11 +190,19 @@ class InferenceServiceTests(unittest.TestCase):
         result = service.generate_text("prompt", 12, 0.7)
 
         self.assertEqual(result["response"], "prompt")
-        self.assertIn(("generate_text", "prompt", 12, 0.7), engine.calls)
+        self.assertIn(("generate_text", "prompt", 12, 0.7, None), engine.calls)
+
+    def test_service_delegates_generate_text_with_think(self):
+        engine = FakeEngine()
+        service = InferenceService(engine)
+
+        service.generate_text("prompt", 12, 0.7, think=True)
+
+        self.assertIn(("generate_text", "prompt", 12, 0.7, True), engine.calls)
 
     def test_chat_transitions_to_degraded_on_engine_unavailable(self):
         class UnavailableEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
                 raise EngineUnavailableError("daemon down")
 
         service = InferenceService(UnavailableEngine())
@@ -196,7 +214,7 @@ class InferenceServiceTests(unittest.TestCase):
 
     def test_generate_text_transitions_to_degraded_on_engine_unavailable(self):
         class UnavailableEngine(FakeEngine):
-            def generate_text(self, prompt, max_new_tokens, temperature):
+            def generate_text(self, prompt, max_new_tokens, temperature, think=None):
                 raise EngineUnavailableError("daemon down")
 
         service = InferenceService(UnavailableEngine())
@@ -208,7 +226,7 @@ class InferenceServiceTests(unittest.TestCase):
 
     def test_chat_propagates_model_not_found_without_changing_lifecycle(self):
         class RejectingEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
                 raise ModelNotFoundError(requested_model, "servable-model")
 
         service = InferenceService(RejectingEngine())

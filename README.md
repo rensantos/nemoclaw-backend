@@ -85,6 +85,17 @@ VRAM: `4bit`/`8bit` use `bitsandbytes` to fit larger models than fp16
 alone allows on a given GPU — see `docs/quantization-design.md`. Requires
 `bitsandbytes` installed (in `requirements.txt`).
 
+`model.think_default` (`OllamaEngine` only) controls whether a
+reasoning-capable model (e.g. Qwen3) emits a `<think>` trace before its
+answer, via Ollama's `think` request field. `null`/omitted (the config
+default) leaves Ollama's own per-model default alone. `false` suppresses
+reasoning by default — useful since it otherwise silently spends part of
+`max_tokens` on the trace before reaching an answer, which can truncate
+short responses entirely. A per-request `"think"` field on
+`POST /v1/chat/completions` or `POST /generate` overrides this default
+either way. `TransformersEngine` ignores this field — no equivalent
+concept.
+
 Configuration priority is:
 
 1. Environment variables
@@ -102,6 +113,8 @@ Supported environment variable overrides:
 - `ENGINE=transformers`
 - `OLLAMA_HOST=http://127.0.0.1:11434`
 - `MODEL_QUANTIZATION=none`
+- `MODEL_THINK_DEFAULT` (unset by default; `true`/`false` otherwise -
+  OllamaEngine-only, see below)
 
 Edit the configuration file with:
 

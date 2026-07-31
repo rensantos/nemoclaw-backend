@@ -529,6 +529,17 @@ components:
             Contract: SSE per OpenAI convention when true. Current
             behavior: HTTP 400 when true (see x-current-behavior on the
             operation).
+        think:
+          type: [boolean, "null"]
+          description: >-
+            Not part of the OpenAI Chat Completions API - a Nemoclaw
+            extension. OllamaEngine-only: forwarded as Ollama's top-level
+            `think` request field, controlling whether a reasoning-capable
+            model (e.g. Qwen3) emits a <think> trace before its answer.
+            null/omitted falls back to the configured model.think_default;
+            if that is also null, Ollama's own per-model default applies.
+            TransformersEngine ignores this field entirely - no equivalent
+            concept there.
 
     ChatCompletionResponse:
       type: object
@@ -872,6 +883,11 @@ components:
         temperature:
           type: number
           description: Defaults to the configured model.temperature_default.
+        think:
+          type: [boolean, "null"]
+          description: >-
+            Same Nemoclaw extension as ChatCompletionRequest.think - see
+            that schema's description. OllamaEngine-only.
 
     GenerateResponse:
       type: object

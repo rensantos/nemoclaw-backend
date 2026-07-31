@@ -142,10 +142,12 @@ class TransformersEngine(InferenceEngine):
         max_tokens: Optional[int],
         temperature: Optional[float],
         requested_model: Optional[str] = None,
+        think: Optional[bool] = None,
     ):
-        # requested_model is accepted for interface parity with OllamaEngine
-        # but intentionally unused: fixing this engine's echo-and-serve
-        # quirk is out of scope (docs/ollama-engine-design.md Section 1).
+        # requested_model and think are accepted for interface parity with
+        # OllamaEngine but intentionally unused: fixing this engine's
+        # echo-and-serve quirk is out of scope (docs/ollama-engine-design.md
+        # Section 1), and there's no reasoning-mode concept here at all.
         self.load_model()
         max_new_tokens = (
             self.config.max_tokens_default if max_tokens is None else max_tokens
@@ -175,7 +177,15 @@ class TransformersEngine(InferenceEngine):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    def generate_text(self, prompt: str, max_new_tokens: int, temperature: float):
+    def generate_text(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+        think: Optional[bool] = None,
+    ):
+        # think is accepted for interface parity with OllamaEngine but
+        # intentionally unused - no reasoning-mode concept here.
         self.load_model()
         inputs = self._tokenize_prompt(prompt)
 

@@ -492,6 +492,31 @@ interactive confirm-prompt branch is unit-tested with a mocked
 occupying all 4 GPUs, including GPU 0/1, which this project has
 deliberately never touched).
 
+Ollama `think` wiring (2026-07-31, same day): `OllamaEngine.chat()`/
+`generate_text()` never exposed Ollama's `think` field (noted as
+deliberately out of scope in the Increment 3 notes above) - a real gap
+found live-testing the frontend integration, where `qwen3:32b`'s
+`<think>` reasoning trace silently consumed a small `max_tokens` budget
+before reaching an answer, truncating the response entirely. New
+`model.think_default` config (`MODEL_THINK_DEFAULT` env override, tri-
+state: `null`/unset leaves Ollama's own per-model default alone, `true`/
+`false` forces it) plus a new per-request `think` field on both
+`ChatCompletionRequest` and `GenerateRequest`, resolved in that priority
+order by `OllamaEngine._apply_think()`. `TransformersEngine` accepts and
+ignores both new `think` parameters, matching the existing
+`requested_model` interface-parity precedent - no reasoning-mode concept
+there. `openapi/backend-node.openapi.yaml` amended in this increment
+(new `think` property on both request schemas, marked as a Nemoclaw
+extension not part of the OpenAI spec). `config/config.yaml`'s live
+`think_default` is now `false` - confirmed live: default chat responses
+now skip reasoning entirely (a "12" answer cost 3 completion tokens,
+down from 98-146 spent on `<think>` before), a `"think": true` per-
+request override still works with enough `max_tokens` headroom, and the
+frontend's own `scripts/test_llm_provider.py` smoke test (which is what
+surfaced the original truncation) now returns a complete, coherent
+response with the default 80-token budget instead of an empty/cut-off
+one.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second
