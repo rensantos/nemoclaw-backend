@@ -418,8 +418,8 @@ manually (mirrors `./backend start`'s own manual-start convention) with a
 `crontab -e` `@reboot` entry for resilience across an actual UBI reboot
 (no systemd without root). `config/config.yaml` now runs `engine: ollama`
 against this same-machine daemon (`ollama_host` stays default
-`http://127.0.0.1:11434`), `model.id: qwen3:8b` - live-validated via
-`/health`, `/v1/models`, and a real `/v1/chat/completions` call with
+`http://127.0.0.1:11434`) - initially `model.id: qwen3:8b`, live-validated
+via `/health`, `/v1/models`, and a real `/v1/chat/completions` call with
 correct token usage. `TransformersEngine`'s config (quantization,
 revision, prior `available` entries) is left intact for a one-line
 revert. `docs/architecture.md`'s Target deployment topology updated: the
@@ -428,8 +428,26 @@ as a genuine second deployment of itself (UBI Node and Local Node both
 run `OllamaEngine`, on different machines - two Backend Nodes, one
 engine). Not done: no CLI wiring for the Ollama daemon's own lifecycle
 (deliberately out of scope, same boundary as the Local Node case - this
-backend doesn't own Ollama's CUDA context); larger Qwen3 sizes and other
-Ollama model families unexplored beyond confirming the mechanism works.
+backend doesn't own Ollama's CUDA context).
+
+Bigger Qwen3 sizes (2026-07-31, same day): `qwen3:30b-a3b` (MoE, ~18GB)
+and `qwen3:32b` (dense, ~20GB) both confirmed working, each correctly
+tensor-split across both GPUs by Ollama automatically (`qwen3:32b`:
+~12.3GB/~12.3GB on GPU 2/3, comfortable headroom under 16GB each;
+`qwen3:30b-a3b`: ~10.6GB/~10.2GB) - no code or config change needed
+beyond `CUDA_VISIBLE_DEVICES=2,3` already being set for the daemon.
+**`model.id: qwen3:32b` is now the live default** (best quality
+validated so far), chosen over keeping `30b-a3b` pulled at the same time
+purely on disk grounds: UBI's disk is a hard, shared constraint (~26GB
+free at the start of this investigation, from a box already ~98% full
+with other users' data) - `30b-a3b` and `32b` together don't fit
+(~38GB), so `30b-a3b` was deleted (`ollama rm`) before pulling `32b`.
+Pulling it again is a normal `ollama pull qwen3:30b-a3b` if wanted, but
+**check `df -h` before pulling anything else** - deploying `32b` alone
+left only ~2GB free, tighter than is comfortable on a box this shared.
+`config/config.yaml`'s `model.available` lists all four validated Qwen3
+sizes (`1.7b`/`8b`/`30b-a3b`/`32b`) with a note on which are actually
+pulled right now vs. just validated-and-available-to-repull.
 
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend

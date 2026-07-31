@@ -123,6 +123,24 @@ unused) or be killed by PID as above.
   (`AGENTS.md`'s OllamaEngine Increment 2 notes), and that boundary holds
   whether the daemon is on the Local Node or on UBI.
 - No multi-model / model-switching UI work.
-- No exploration of larger Qwen3 sizes or other Ollama-servable model
-  families beyond confirming the mechanism works — that's a future
-  increment if `qwen3:8b` proves out.
+
+## Update 2026-07-31 (same day): bigger Qwen3 sizes, live default changed
+
+The "future increment if `qwen3:8b` proves out" above happened the same
+day. `qwen3:30b-a3b` (MoE, ~18GB) and `qwen3:32b` (dense, ~20GB) were both
+pulled and validated — Ollama tensor-splits either one across GPU 2+3
+automatically (no config change beyond the `CUDA_VISIBLE_DEVICES=2,3`
+already set for the daemon): `qwen3:32b` landed at ~12.3GB/~12.3GB,
+comfortable under 16GB per card; `qwen3:30b-a3b` at ~10.6GB/~10.2GB.
+
+**`model.id` is now `qwen3:32b`** — the best-quality option validated so
+far, chosen as the live default. `30b-a3b` and `32b` do not both fit
+UBI's disk at once (~38GB combined against a shared box that started
+this whole investigation at ~26GB free); `30b-a3b` was deleted
+(`ollama rm qwen3:30b-a3b`) before pulling `32b`. **After pulling
+`32b`, UBI had only ~2GB free** — tighter than is comfortable on a
+shared box. Anyone picking this up again: run `df -h` before pulling
+anything else, and know that `30b-a3b` is validated-but-not-currently-
+pulled, listed in `config/config.yaml`'s `model.available` for exactly
+that reason (repull with a plain `ollama pull qwen3:30b-a3b` if wanted,
+but something else likely needs to be deleted first to make room).

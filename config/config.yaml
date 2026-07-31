@@ -23,12 +23,16 @@ backend:
   ollama_host: http://127.0.0.1:11434
 
 model:
-  # qwen3:8b via the Ollama daemon on UBI - see docs/ollama-on-ubi-design.md.
+  # qwen3:32b via the Ollama daemon on UBI - see docs/ollama-on-ubi-design.md.
   # This is the answer to the "get the newest Qwen working on UBI"
   # investigation (docs/problems.md): Qwen3 is a confirmed dead end for
   # TransformersEngine on UBI's pinned driver, but works fine here since
-  # Ollama doesn't share that constraint chain.
-  id: qwen3:8b
+  # Ollama doesn't share that constraint chain. qwen3:32b (2026-07-31)
+  # needs both GPUs (splits ~12.3GB/~12.3GB across GPU 2+3, confirmed live)
+  # and leaves UBI's disk very tight (~2GB free at time of writing, on an
+  # already ~98% full shared box) - see docs/ollama-on-ubi-design.md's
+  # disk-budget note before pulling anything else alongside it.
+  id: qwen3:32b
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
@@ -51,13 +55,23 @@ model:
   # headroom to spare - hence backend.gpu above spans two GPUs.
   revision: ""
   available:
+    - id: qwen3:32b
+      name: Qwen3 32B (Ollama, live default - needs both GPUs, ~20GB disk)
+      path: qwen3:32b
+      engine: ollama
+      device: cuda
+    - id: qwen3:30b-a3b
+      name: Qwen3 30B-A3B MoE (Ollama, validated - needs both GPUs, ~18GB disk, not currently pulled)
+      path: qwen3:30b-a3b
+      engine: ollama
+      device: cuda
     - id: qwen3:8b
-      name: Qwen3 8B (Ollama, live default - docs/ollama-on-ubi-design.md)
+      name: Qwen3 8B (Ollama, validated, fits one GPU - not currently pulled)
       path: qwen3:8b
       engine: ollama
       device: cuda
     - id: qwen3:1.7b
-      name: Qwen3 1.7B (Ollama, lighter validated fallback)
+      name: Qwen3 1.7B (Ollama, lighter validated fallback, not currently pulled)
       path: qwen3:1.7b
       engine: ollama
       device: cuda
