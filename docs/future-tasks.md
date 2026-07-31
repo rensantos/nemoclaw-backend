@@ -213,9 +213,27 @@
   hardware until the driver gets upgraded by someone with admin access.
   `config/config.yaml` is back on `TinyLlama/TinyLlama-1.1B-Chat-v1.0`,
   confirmed live via `/health` and a real `/v1/chat/completions` call.
-  Follow-up, not done: pick a better TinyLlama-replacement from a
-  `transformers`-4.36-era architecture (Llama 2/3, Mistral) sized for
-  the ~9.4GB actually free on GPU 0 (shared with another user's job).
+- Done (2026-07-31): picked a better TinyLlama-replacement. New
+  `model.revision` config field (`MODEL_REVISION` env override,
+  `config.py`/`engines/transformers_engine.py`) pins the Hub commit
+  `TransformersEngine.load_model()` loads from — needed because
+  `mistralai/Mistral-7B-Instruct-v0.2`'s `main` tokenizer.json was
+  re-saved by a newer `tokenizers` library than UBI's pinned one can
+  parse (docs/problems.md). Pinning `revision=
+  dca6e4b60aca009ed25ffa70c9bb65e46960a573` (pre-re-save) resolves it.
+  `NousResearch/Llama-2-7b-chat-hf` also confirmed working at `main`,
+  no pinning needed. `config/config.yaml` now runs
+  `mistralai/Mistral-7B-Instruct-v0.2` (revision-pinned), live-validated
+  via `/health`, `/v1/models`, and a real `/v1/chat/completions` call.
+  Discovered doing this: `bitsandbytes` is currently broken on UBI
+  (`import bitsandbytes` itself fails under the pinned `torch==2.0.1`
+  — see `docs/problems.md`), so `quantization` stays `none`; fp16 7B
+  needs ~14.8GB VRAM, which doesn't fit GPU 0/1's ~9.4GB free (shared
+  with another user's job) — `backend.gpu` moved from `0` to `2` (idle)
+  to accommodate. Follow-up, not done: find a `bitsandbytes` build
+  compatible with `torch==2.0.1+cu117` so 4-bit/8-bit quantization
+  actually works on UBI, which would remove the VRAM/GPU-choice
+  constraint above.
 - Future: multi-GPU. UBI actually has **4x RTX A4000** (64GB combined
   VRAM), not 1 — discovered 2026-07-30, not yet used.
   `TransformersEngine.load_model()` already calls `device_map="auto"`

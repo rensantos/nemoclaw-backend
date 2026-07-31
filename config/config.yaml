@@ -1,13 +1,15 @@
 backend:
   host: 127.0.0.1
   port: 8000
-  gpu: 0
+  # GPU 0/1 are frequently occupied by another user's job on this shared
+  # box (docs/problems.md); GPU 2 is the idle card this config targets.
+  gpu: 2
   # Which InferenceEngine implementation serves requests.
   # Valid values: transformers | ollama (see docs/ollama-engine-design.md)
   engine: transformers
 
 model:
-  id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  id: mistralai/Mistral-7B-Instruct-v0.2
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
@@ -16,7 +18,15 @@ model:
   # only architectures that version already supported will load, and even
   # then, Hub tokenizer.json file-format drift can still break loading
   # independent of architecture age (see docs/problems.md's Mistral note).
+  # bitsandbytes is currently broken on UBI regardless of value chosen
+  # here (torch.library.impl_abstract missing under pinned torch 2.0.1) -
+  # kept at "none" until that's fixed.
   quantization: none
+  # Pins the Hub commit this repo loads from. mistralai/Mistral-7B-Instruct-v0.2's
+  # `main` tokenizer.json was re-saved by a newer `tokenizers` library than
+  # UBI's pinned transformers==4.36.0 can parse (docs/problems.md). This
+  # revision predates that re-save and is confirmed loadable.
+  revision: dca6e4b60aca009ed25ffa70c9bb65e46960a573
   available:
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       name: TinyLlama 1.1B Chat
@@ -24,7 +34,7 @@ model:
       engine: transformers
       device: cuda
     - id: mistralai/Mistral-7B-Instruct-v0.2
-      name: Mistral 7B Instruct v0.2 (4-bit) - NOT WORKING, tokenizer.json format issue
+      name: Mistral 7B Instruct v0.2 (revision-pinned, see model.revision)
       path: mistralai/Mistral-7B-Instruct-v0.2
       engine: transformers
       device: cuda

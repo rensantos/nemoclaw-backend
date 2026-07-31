@@ -137,17 +137,23 @@ class CliHelperTests(unittest.TestCase):
             port_open=False,
             matching_processes=[],
         )
+        # cli.status() filters gpu_manager.detect_gpus() by the real,
+        # module-global config.backend.gpu (not by current_gpu.backend_gpu
+        # below) - match whatever that's actually configured to, rather
+        # than hardcoding an index, so this test doesn't silently depend
+        # on config/config.yaml's current value.
+        configured_gpu_index = cli.config.backend.gpu
         current_gpu = CurrentGPUInfo(
-            selected_cuda_device="0",
-            backend_gpu="0",
+            selected_cuda_device=configured_gpu_index,
+            backend_gpu=configured_gpu_index,
             current_model="tiny",
             available_memory_mib=1024,
             cuda_available=True,
-            torch_current_device="0",
+            torch_current_device=configured_gpu_index,
             driver_version="535.0",
         )
         detected_gpu = GPUInfo(
-            index="0",
+            index=configured_gpu_index,
             name="RTX A4000",
             memory_total_mib=16384,
             memory_used_mib=512,

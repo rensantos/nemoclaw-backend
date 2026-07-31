@@ -20,6 +20,7 @@ DEFAULTS = {
         "max_tokens_default": 256,
         "temperature_default": 0.7,
         "quantization": "none",
+        "revision": "",
     },
 }
 
@@ -42,6 +43,7 @@ class ModelConfig:
     max_tokens_default: int
     temperature_default: float
     quantization: str
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,9 @@ def load_config() -> Config:
                 quantization, ", ".join(VALID_QUANTIZATIONS)
             )
         )
+    revision = _env_value(
+        "MODEL_REVISION", _section_value(raw_config, "model", "revision")
+    )
 
     return Config(
         backend=BackendConfig(
@@ -159,6 +164,7 @@ def load_config() -> Config:
             max_tokens_default=max_tokens_default,
             temperature_default=temperature_default,
             quantization=quantization,
+            revision=revision,
         ),
     )
 

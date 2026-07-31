@@ -94,12 +94,14 @@ class TransformersEngine(InferenceEngine):
         if self.model is not None and self.tokenizer is not None:
             return
 
-        print("Loading model: {} (quantization={})".format(
-            self.model_id, self.config.model.quantization
+        revision = self.config.model.revision or None
+        print("Loading model: {} (quantization={}, revision={})".format(
+            self.model_id, self.config.model.quantization, revision or "main"
         ))
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, revision=revision)
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
+            revision=revision,
             device_map=_device_map(self.config),
             **_quantization_load_kwargs(self.config.model.quantization),
         )

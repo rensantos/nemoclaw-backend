@@ -83,6 +83,24 @@ class ConfigEngineSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._load({}, env={"MODEL_QUANTIZATION": "2bit"})
 
+    def test_revision_defaults_to_empty_when_unset(self):
+        result = self._load({})
+
+        self.assertEqual(result.model.revision, "")
+
+    def test_revision_reads_yaml_value(self):
+        result = self._load({"model": {"revision": "abc123"}})
+
+        self.assertEqual(result.model.revision, "abc123")
+
+    def test_revision_env_override_takes_precedence_over_yaml(self):
+        result = self._load(
+            {"model": {"revision": "abc123"}},
+            env={"MODEL_REVISION": "def456"},
+        )
+
+        self.assertEqual(result.model.revision, "def456")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,21 +78,62 @@ The model repo's `tokenizer.json` on the Hub was re-saved at some point
 by a newer `tokenizers` library than the old, pinned one here can parse
 — a file-format compatibility problem, independent of whether the model
 *architecture* is old enough. Hub files can be silently updated over
-time even for long-established models. Not yet resolved; candidates for
-next time: try an older/specific revision of the same repo (a commit
-pinned via `revision=` predating the tokenizer.json update), try a
-different repo/quantized mirror of the same model, or accept that this
-old a `tokenizers` pin may be incompatible with most current Hub
-snapshots regardless of architecture age.
+time even for long-established models.
 
-**Open strategic question, not yet decided:** given how narrow and
-moving this compatibility window is, it may not be worth continuing to
-fight UBI's `TransformersEngine` for anything beyond what's already
-proven (`TinyLlama`) until the driver gets upgraded by an admin. The
-Local Node (Ollama) has no equivalent constraint and already serves
-modern models (Qwen3, etc.) — see `docs/architecture.md`'s Target
-deployment topology. Revisit this tradeoff explicitly before investing
-more time chasing UBI model compatibility.
+**Resolved (2026-07-31):** confirmed via `huggingface_hub.HfApi.
+list_repo_commits()` that this repo's commit `9925900` ("[AUTO] CVST
+Tokenizer Badger", 2024-06-24) is almost certainly the re-save. Pinning
+`revision=dca6e4b60aca009ed25ffa70c9bb65e46960a573` (the original "Add
+v0.2" commit, 2023-12-11, predating it) loads cleanly under the pinned
+stack — verified both as a standalone `from_pretrained()` probe and
+live end-to-end through `./backend start` (`/health`, `/v1/models`,
+real `/v1/chat/completions` output with token usage). New `model.
+revision` config field (`MODEL_REVISION` env override) threads this
+through `TransformersEngine.load_model()`; `config/config.yaml` now
+pins it for `mistralai/Mistral-7B-Instruct-v0.2`. General lesson: when
+a `transformers`-4.36-era-supported model still fails to load, check
+whether it's a Hub file-format drift issue before assuming the
+architecture itself is unsupported — an older revision is often a
+fix, not just a Mistral-specific workaround.
+
+Also confirmed working the same session: `NousResearch/Llama-2-7b-chat-hf`
+(ungated Llama-2-7B-chat mirror) loads and generates cleanly at `main`,
+no revision pinning needed — not deployed (Mistral was chosen instead
+to close the previously-open Mistral item), but validates the Llama
+family still works at larger sizes than TinyLlama.
+
+**bitsandbytes is currently broken on UBI, independent of model
+choice:** `import bitsandbytes` itself fails —
+`AttributeError: module 'torch.library' has no attribute
+'impl_abstract'`. The installed `bitsandbytes` build expects a `torch`
+API that doesn't exist in the pinned `torch==2.0.1+cu117`. This means
+`model.quantization: 4bit`/`8bit` cannot actually run on UBI today
+despite being implemented and unit-tested (`docs/quantization-design.md`)
+— confirmed by reproducing the failure directly, not inferred. Not
+fixed: would need a `bitsandbytes` version compatible with `torch`
+2.0.1, not yet identified. `config/config.yaml` stays on `quantization:
+none` until this is resolved.
+
+**Practical consequence:** fp16 is the only working precision on UBI
+right now, which means model choice is also VRAM-choice: a 7B model in
+fp16 needs ~14.8GB, i.e. essentially all of one RTX A4000's 16GB.
+GPU 0/1 are frequently occupied by another user's concurrent job
+(~6.6GB used each, observed repeatedly this session and in the prior
+session), which doesn't leave enough headroom for an unquantized 7B.
+`config/config.yaml`'s `backend.gpu` was changed from `0` to `2` (the
+idle card) for this reason — a single-index config change, not a
+multi-GPU setup (see `docs/future-tasks.md`'s Multi-GPU entry, still
+unstarted).
+
+**Open strategic question from 2026-07-30, now answered by this
+session's results:** given how narrow and moving UBI's compatibility
+window looked, it was unclear whether continuing to chase
+`TransformersEngine` compatibility here was worth it versus leaning on
+the Local Node (Ollama). This session's outcome: the window is narrow
+but tractable — both Llama-2-7B and Mistral-7B (revision-pinned) now
+load and serve correctly, and `mistralai/Mistral-7B-Instruct-v0.2` is
+the new live default on UBI. Worth continuing to invest here, at least
+until the bitsandbytes/VRAM constraint above becomes limiting again.
 
 ### If reproducing/verifying this
 

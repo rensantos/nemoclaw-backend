@@ -320,6 +320,27 @@ everything actually cached, including repos not in `config.yaml`. New
 `huggingface_hub` dependency (was already transitive via `transformers`).
 Discovery only — nothing auto-writes `config.yaml`.
 
+Model-revision pinning + UBI model upgrade (2026-07-31): new
+`model.revision` config field (`MODEL_REVISION` env override,
+`config.py`/`engines/transformers_engine.py`) pins the Hub commit
+`TransformersEngine.load_model()` loads from, since a model's `main`
+tokenizer.json can be re-saved by a newer `tokenizers` library than
+UBI's pinned one can parse, independent of architecture support
+(`docs/problems.md`'s Mistral case). `NousResearch/Llama-2-7b-chat-hf`
+(ungated Llama-2-7B-chat mirror) confirmed working at `main`, no
+pinning needed. `mistralai/Mistral-7B-Instruct-v0.2` confirmed working
+pinned to `revision: dca6e4b60aca009ed25ffa70c9bb65e46960a573` (predates
+the tokenizer.json re-save) — now `config/config.yaml`'s live default,
+replacing TinyLlama, confirmed via `/health`, `/v1/models`, and a real
+`/v1/chat/completions` call with correct token usage. Also discovered:
+`bitsandbytes` is currently broken on UBI regardless of model choice
+(`import bitsandbytes` itself fails under the pinned `torch==2.0.1` —
+see `docs/problems.md`), so `quantization` stays `none`; fp16 Mistral-7B
+needs ~14.8GB VRAM, which doesn't fit GPU 0/1's ~9.4GB free (frequently
+occupied by another user's job) — `backend.gpu` moved from `0` to `2`
+(the idle card) to accommodate. Not fixed: a `bitsandbytes` build
+compatible with `torch==2.0.1+cu117`.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second

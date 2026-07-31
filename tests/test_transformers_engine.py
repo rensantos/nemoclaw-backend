@@ -7,7 +7,7 @@ from config import BackendConfig, Config, ModelConfig
 from engines.transformers_engine import TransformersEngine, scan_local_cache
 
 
-def _make_config(quantization="none", model_id="test-model", gpu="0"):
+def _make_config(quantization="none", model_id="test-model", gpu="0", revision=""):
     return Config(
         backend=BackendConfig(
             host="127.0.0.1",
@@ -21,6 +21,7 @@ def _make_config(quantization="none", model_id="test-model", gpu="0"):
             max_tokens_default=16,
             temperature_default=0.1,
             quantization=quantization,
+            revision=revision,
         ),
     )
 
@@ -82,6 +83,32 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
 
         _, kwargs = mocked_model.call_args
         self.assertEqual(kwargs.get("device_map"), "auto")
+
+    def test_unset_revision_passes_none_to_from_pretrained(self):
+        engine = TransformersEngine(_make_config(revision=""))
+        with mock.patch(
+            "engines.transformers_engine.AutoTokenizer.from_pretrained"
+        ) as mocked_tokenizer, mock.patch(
+            "engines.transformers_engine.AutoModelForCausalLM.from_pretrained"
+        ) as mocked_model:
+            mocked_model.return_value = mock.Mock()
+            engine.load_model()
+
+        self.assertIsNone(mocked_tokenizer.call_args.kwargs.get("revision"))
+        self.assertIsNone(mocked_model.call_args.kwargs.get("revision"))
+
+    def test_pinned_revision_is_passed_to_tokenizer_and_model(self):
+        engine = TransformersEngine(_make_config(revision="abc123"))
+        with mock.patch(
+            "engines.transformers_engine.AutoTokenizer.from_pretrained"
+        ) as mocked_tokenizer, mock.patch(
+            "engines.transformers_engine.AutoModelForCausalLM.from_pretrained"
+        ) as mocked_model:
+            mocked_model.return_value = mock.Mock()
+            engine.load_model()
+
+        self.assertEqual(mocked_tokenizer.call_args.kwargs.get("revision"), "abc123")
+        self.assertEqual(mocked_model.call_args.kwargs.get("revision"), "abc123")
 
     def test_load_model_is_a_no_op_once_already_loaded(self):
         engine = TransformersEngine(_make_config(quantization="none"))
