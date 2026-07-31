@@ -174,6 +174,58 @@ are available. The practical "go bigger" ceiling on this machine is
 roughly the 13B-34B range (Llama-2-13B ≈ 26GB, still Llama-family),
 not larger, until disk changes.
 
+### Multi-family model compatibility sweep (2026-07-31)
+
+Systematic pass/fail sweep across model families beyond Llama/Mistral,
+using the standalone `probe_model.py` diagnostic (tokenizer load +
+model load + one `generate()` call, on GPU 2/3 only — GPU 0/1, the
+other user's job, checked via `nvidia-smi` before/after and never
+touched). Each candidate's cache was deleted before the next download,
+given the ~30GB disk ceiling. Small pure-Python deps needed by some
+repos' `trust_remote_code` (`tiktoken==0.5.1` — newer needs a Rust
+compiler this box's `pip` can't build; `einops`; `transformers_stream_
+generator`) were installed into the `llm` env; no core dependency
+(`torch`/`transformers`/`accelerate`) was touched.
+
+**Background fact that shapes this whole sweep:** `transformers==
+4.36.0`'s `CONFIG_MAPPING_NAMES` has **zero** entries for `qwen` or
+`gemma`, at any version — confirmed by inspecting it directly, not
+inferred. So for those two families, the only possible path is a
+repo that ships its own `trust_remote_code` modeling files predating
+each family's full upstream integration into `transformers`.
+
+| Model | Result | Why |
+|---|---|---|
+| `Qwen/Qwen-7B-Chat` (Qwen1, Aug 2023) | **PASS** | `trust_remote_code=True` + `tiktoken`/`einops`/`transformers_stream_generator`; ships its own modeling code, sidesteps the missing native class entirely. |
+| `Qwen/Qwen1.5-7B-Chat` | FAIL | Needs `Qwen2Tokenizer`, which doesn't exist in 4.36.0 - and unlike Qwen1, ships no `trust_remote_code` fallback. Fails before any download. |
+| `Qwen/Qwen2-7B-Instruct` | FAIL | Same as Qwen1.5 - identical `Qwen2Tokenizer` error. |
+| `Qwen/Qwen3-1.7B` | FAIL | Same as Qwen1.5/2 - confirms Qwen3's block (docs/problems.md's original entry) is the same root cause as every post-Qwen1 release, not something specific to Qwen3. |
+| `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | FAIL | Loads as plain `LlamaForCausalLM`, but its `rope_scaling` uses the Llama-3.1-style dict (`{factor, low_freq_factor, high_freq_factor, original_max_position_embeddings, rope_type: "llama3"}`), which 4.36.0's `LlamaConfig` validation rejects - it only accepts the older `{type, factor}` shape. Confirms this distill is built on a Llama-3.1 base, not the plain Llama-3 that already works here. |
+| `deepseek-ai/deepseek-llm-7b-chat` (Dec 2023) | **PASS** | Plain `LlamaForCausalLM`, older rope config shape. |
+| `deepseek-ai/deepseek-coder-6.7b-instruct` | **PASS** | Same as above. |
+| `mistralai/Mistral-7B-Instruct-v0.1` | **PASS** (revision-pinned) | Same "CVST Tokenizer Badger" Hub re-save pattern as v0.2 (docs/problems.md's earlier entry) - full commit history checked, confirmed the same auto-generated commit exists here too; pinning to the commit before it fixes it. |
+| `mistralai/Mistral-7B-Instruct-v0.3` | FAIL, no fix available | Same tokenizer.json parse error, but its *entire* commit history (34 commits) dates from its initial 2024-05-22 release - it shipped with the modern format from day one, so there is no older revision to pin to. Would need a newer `tokenizers` library - a core-stack change, out of scope. |
+| `mistralai/Mistral-Nemo-Instruct-2407` (12B) | FAIL | Weight-shape mismatch (`[1024,5120]` vs `[1280,5120]`) - Mistral-Nemo introduced an explicit `head_dim` config field that 4.36.0's `MistralConfig`/modeling code doesn't read, so it infers a different (wrong) head dimension than the checkpoint was actually saved with. Architecture-level gap, not fixable by installing a package. |
+| `alpindale/gemma-7b-it` (ungated Gemma-1 mirror) | FAIL | Needs `GemmaTokenizer`, absent in 4.36.0; confirmed no `trust_remote_code` fallback either (fails identically both ways). Fails before any download either way - the official `google/gemma-*` repos are additionally gated (401, needs a human to accept Google's license on huggingface.co), but that's moot here since the architecture itself isn't loadable regardless. |
+| `tiiuae/falcon-7b-instruct` | **PASS** | Via `trust_remote_code=True` - even though Falcon is now fully native in current `transformers`, the repo still carries its original custom modeling files, which the dynamic-module loader happily serves to an old `transformers` that doesn't have native Falcon support in this exact form. |
+| `microsoft/phi-2` | **FAIL - silent, not a crash** | Loaded with **no exception**, but logged that essentially every `self_attn` weight in the checkpoint was "not used" and every `query_key_value` weight was "newly initialized" (random). The Hub checkpoint now uses split `q_proj`/`k_proj`/`v_proj` naming; 4.36.0's built-in `PhiForCausalLM` expects an older fused `query_key_value` naming. `generate()` "succeeded" and produced pure noise (`"'s.\n:\n:\n\"\n\"\n\"..."`). **This is the most dangerous failure mode found this session**: a naive test that only checks "did it throw" would wrongly call this a pass. Also separately hit (before this): `device_map="auto"` isn't supported by 4.36.0's `PhiForCausalLM` at all (`_no_split_modules` not implemented) - irrelevant for a model this small, worked once pinned to a single GPU, but is its own real gap. |
+
+**Net result:** confirmed working (beyond the Llama-3-8B already
+deployed): `Qwen/Qwen-7B-Chat`, `deepseek-ai/deepseek-llm-7b-chat`,
+`deepseek-ai/deepseek-coder-6.7b-instruct`,
+`mistralai/Mistral-7B-Instruct-v0.1`, `tiiuae/falcon-7b-instruct`.
+None deployed - `NousResearch/Meta-Llama-3-8B-Instruct` remains the
+live default (most recent architecture confirmed working). Recorded
+here as validated options for a future model switch without needing
+to re-run this compatibility research.
+
+**Methodology note:** for `trust_remote_code=True` repos, "did the
+process exit 0" is not sufficient evidence of a working model - the
+Phi-2 case shows a load can silently substitute random weights for a
+naming mismatch and still complete. Always inspect the actual
+`generate()` output for coherence, not just the absence of a
+traceback.
+
 ### If reproducing/verifying this
 
 ```bash

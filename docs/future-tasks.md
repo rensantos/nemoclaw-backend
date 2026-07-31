@@ -261,6 +261,28 @@
   for fp16 weights alone, which doesn't fit regardless of combined GPU
   VRAM. Practical "go bigger" ceiling is roughly the 13B-34B range
   (Llama-family) until disk changes.
+- Done (2026-07-31): multi-family compatibility sweep, full pass/fail
+  matrix and root causes in `docs/problems.md`'s "Multi-family model
+  compatibility sweep" section. Confirmed working, not yet deployed:
+  `Qwen/Qwen-7B-Chat` (needs `trust_remote_code=True` +
+  `tiktoken`/`einops`/`transformers_stream_generator`),
+  `deepseek-ai/deepseek-llm-7b-chat`,
+  `deepseek-ai/deepseek-coder-6.7b-instruct`,
+  `mistralai/Mistral-7B-Instruct-v0.1` (revision-pinned, same fix
+  pattern as v0.2), `tiiuae/falcon-7b-instruct` (also needs
+  `trust_remote_code=True`). Confirmed blocked, with root cause each
+  time: Qwen1.5/2/3 (no native class, no `trust_remote_code`
+  fallback), Gemma (same), Mistral-v0.3 and DeepSeek-R1-Distill-Llama-8B
+  (both shipped only in a newer file/config format with no older
+  revision to fall back to), Mistral-Nemo-12B (`head_dim` config field
+  4.36.0 doesn't read). `microsoft/phi-2` is its own case: loads
+  without error but silently random-initializes its entire attention
+  stack from a weight-naming mismatch - flagged as the session's most
+  important methodology lesson (exit code 0 isn't proof of a working
+  model for `trust_remote_code` repos; always check generation
+  coherence). Follow-up, not done: pick one of the confirmed-working
+  candidates above to actually deploy, if Llama-3-8B ever needs
+  replacing.
 - Done: local Hugging Face cache discovery
   (`engines.transformers_engine.scan_local_cache()`,
   `./backend model list|current|info`'s new `Cached locally:` line,

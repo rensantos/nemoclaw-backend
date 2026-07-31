@@ -367,6 +367,22 @@ for fp16 weights alone regardless of combined GPU VRAM. Practical
 ceiling is roughly the 13B-34B range (Llama-family) until disk
 changes.
 
+Multi-family compatibility sweep (2026-07-31): systematically tested
+Qwen (1/1.5/2/3), DeepSeek, more Mistral versions, Gemma, Falcon, and
+Phi against the pinned `transformers==4.36.0` stack - full pass/fail
+matrix with root causes in `docs/problems.md`. Confirmed working,
+available as future deploy options: `Qwen/Qwen-7B-Chat` (needs
+`trust_remote_code=True`), `deepseek-ai/deepseek-llm-7b-chat`,
+`deepseek-ai/deepseek-coder-6.7b-instruct`,
+`mistralai/Mistral-7B-Instruct-v0.1` (revision-pinned),
+`tiiuae/falcon-7b-instruct`. `NousResearch/Meta-Llama-3-8B-Instruct`
+remains the live default. Key methodology finding: `microsoft/phi-2`
+loads with no exception but silently random-initializes its attention
+weights from a naming mismatch - "no crash" isn't proof of a working
+model for `trust_remote_code` repos; always check generation
+coherence. All testing stayed on GPU 2/3 - GPU 0/1 (another user's
+concurrent job) were never touched.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second
