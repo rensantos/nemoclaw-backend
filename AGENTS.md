@@ -449,6 +449,27 @@ left only ~2GB free, tighter than is comfortable on a box this shared.
 sizes (`1.7b`/`8b`/`30b-a3b`/`32b`) with a note on which are actually
 pulled right now vs. just validated-and-available-to-repull.
 
+Shared-GPU busy check (2026-07-31, same day): neither engine, nor
+`GPUManager`, previously checked whether `backend.gpu`'s configured
+index(es) were already in use by another process before loading a
+model - purely a static assumption in config, verified only by manually
+running `nvidia-smi` throughout this session's work. New
+`GPUManager.busy_gpus(threshold_mib=500)` checks each configured GPU
+index (handles comma-separated multi-GPU) and returns any already
+showing usage above the threshold. `InferenceService` now optionally
+takes a `gpu_manager` and logs a warning for each busy GPU found,
+checked once at startup before `engine.load_model()` runs (so any usage
+found at that point cannot be this process's own - by definition,
+before it has loaded anything). `create_inference_service()` wires this
+up for the real server; test construction (`InferenceService(engine)`
+with no `gpu_manager`) is unaffected, since it's an optional parameter
+skipped when absent. `./backend status` and `./backend gpu current`
+both surface it as an "Other GPU usage" line. No per-process
+attribution (`nvidia-smi`'s basic query doesn't provide it) and nothing
+is blocked - this is visibility, not an enforced lock, live-verified by
+triggering a real warning off the Ollama daemon's own still-warm
+`qwen3:32b` session.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second

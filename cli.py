@@ -413,6 +413,19 @@ def _print_gpu(gpu) -> None:
     typer.echo("  Free VRAM: {}".format(_mib(gpu.memory_free_mib)))
     typer.echo("  Temperature: {}".format(_temperature(gpu.temperature_c)))
     typer.echo("  Utilization: {}".format(_percent(gpu.utilization_percent)))
+
+
+def _print_busy_gpu_warning() -> None:
+    """Warn if any configured backend.gpu index already shows significant
+    memory usage - can't be this backend's own model if it isn't running,
+    so it's evidence of another process on this shared box."""
+    busy = gpu_manager.busy_gpus()
+    if not busy:
+        typer.echo("Other GPU usage: none detected on configured GPU(s)")
+        return
+    typer.echo("Other GPU usage: WARNING - configured GPU(s) already busy")
+    for gpu in busy:
+        typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
     typer.echo("  Driver: {}".format(gpu.driver_version))
 
 
@@ -613,6 +626,7 @@ def status():
             None,
         )
     )))
+    _print_busy_gpu_warning()
     typer.echo("Log: {}".format(LOG_FILE))
 
 
@@ -776,6 +790,7 @@ def gpu_current():
     typer.echo("CUDA available: {}".format("yes" if current_gpu.cuda_available else "no"))
     typer.echo("Torch current device: {}".format(current_gpu.torch_current_device))
     typer.echo("Driver: {}".format(current_gpu.driver_version))
+    _print_busy_gpu_warning()
 
 
 @gpu_app.command("monitor")

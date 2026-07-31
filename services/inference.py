@@ -1,20 +1,49 @@
+import logging
+from typing import Optional
+
 from config import settings
 from engines.base import EngineUnavailableError, InferenceEngine
+from services.gpu import GPUManager
 from services.lifecycle import (
     LifecycleState,
     health_status_for_lifecycle_state,
     lifecycle_not_implemented_response,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 class InferenceService:
     """Application service that owns runtime lifecycle state and delegates
     inference work to an engine."""
 
-    def __init__(self, engine: InferenceEngine):
+    def __init__(self, engine: InferenceEngine, gpu_manager: Optional[GPUManager] = None):
         self.engine = engine
+        self.gpu_manager = gpu_manager
+        self._warn_if_gpu_busy()
         self.engine.load_model()
         self.lifecycle_state = LifecycleState.READY
+
+    def _warn_if_gpu_busy(self):
+        """Log a warning for any configured GPU that already shows
+        significant memory usage before this engine has loaded anything -
+        on UBI's shared box, that memory can only belong to another
+        process (docs/problems.md's GPU 0/1 note). No gpu_manager means no
+        config was available to check against (e.g. some direct-engine
+        test construction) - silently skipped, not an error.
+        """
+        if self.gpu_manager is None:
+            return
+        for gpu in self.gpu_manager.busy_gpus():
+            _logger.warning(
+                "GPU %s ('%s') already has %sMiB/%sMiB used before this "
+                "backend has loaded a model - likely another process's "
+                "job on this shared box, not this backend's own usage",
+                gpu.index,
+                gpu.name,
+                gpu.memory_used_mib,
+                gpu.memory_total_mib,
+            )
 
     def health(self):
         try:
@@ -84,4 +113,4 @@ def _build_engine(config):
 
 
 def create_inference_service():
-    return InferenceService(_build_engine(settings))
+    return InferenceService(_build_engine(settings), GPUManager(settings))

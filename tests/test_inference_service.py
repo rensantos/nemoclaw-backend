@@ -41,6 +41,22 @@ class FakeEngine:
         return {"model": "fake", "response": prompt}
 
 
+class FakeGPUInfo:
+    def __init__(self, index, name, memory_used_mib, memory_total_mib):
+        self.index = index
+        self.name = name
+        self.memory_used_mib = memory_used_mib
+        self.memory_total_mib = memory_total_mib
+
+
+class FakeGPUManager:
+    def __init__(self, busy=None):
+        self._busy = busy or []
+
+    def busy_gpus(self):
+        return self._busy
+
+
 class InferenceServiceTests(unittest.TestCase):
     def test_service_loads_engine_once_on_init(self):
         engine = FakeEngine()
@@ -48,6 +64,36 @@ class InferenceServiceTests(unittest.TestCase):
         InferenceService(engine)
 
         self.assertTrue(engine.loaded)
+        self.assertEqual(engine.calls, ["load_model"])
+
+    def test_no_warning_when_gpu_manager_omitted(self):
+        with self.assertRaises(AssertionError):
+            with self.assertLogs("services.inference", level="WARNING"):
+                InferenceService(FakeEngine())
+
+    def test_no_warning_when_configured_gpu_idle(self):
+        with self.assertRaises(AssertionError):
+            with self.assertLogs("services.inference", level="WARNING"):
+                InferenceService(FakeEngine(), FakeGPUManager(busy=[]))
+
+    def test_warns_when_configured_gpu_already_busy(self):
+        busy_gpu = FakeGPUInfo("2", "RTX A4000", 7000, 16384)
+
+        with self.assertLogs("services.inference", level="WARNING") as logs:
+            InferenceService(FakeEngine(), FakeGPUManager(busy=[busy_gpu]))
+
+        self.assertTrue(any("GPU 2" in message for message in logs.output))
+        self.assertTrue(any("7000" in message for message in logs.output))
+
+    def test_gpu_busy_check_runs_before_engine_load(self):
+        engine = FakeEngine()
+        busy_gpu = FakeGPUInfo("2", "RTX A4000", 7000, 16384)
+
+        with self.assertLogs("services.inference", level="WARNING"):
+            InferenceService(engine, FakeGPUManager(busy=[busy_gpu]))
+
+        # load_model is still the only engine call - the check doesn't
+        # touch the engine itself, just logs before loading proceeds.
         self.assertEqual(engine.calls, ["load_model"])
 
     def test_service_delegates_health_and_models(self):

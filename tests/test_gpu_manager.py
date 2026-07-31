@@ -89,6 +89,67 @@ class GPUManagerTests(unittest.TestCase):
         with mock.patch.object(manager, "detect_gpus", return_value=[]):
             self.assertIsNone(manager.gpu_name())
 
+    def test_busy_gpus_returns_empty_when_configured_gpu_idle(self):
+        manager = GPUManager(FakeConfig())
+        idle_gpu = GPUInfo(
+            index="0", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=1, memory_free_mib=16383,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[idle_gpu]):
+            self.assertEqual(manager.busy_gpus(), [])
+
+    def test_busy_gpus_flags_configured_gpu_above_threshold(self):
+        manager = GPUManager(FakeConfig())
+        busy_gpu = GPUInfo(
+            index="0", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=7000, memory_free_mib=9384,
+            temperature_c=60, utilization_percent=30, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[busy_gpu]):
+            result = manager.busy_gpus()
+
+        self.assertEqual(result, [busy_gpu])
+
+    def test_busy_gpus_checks_each_index_in_multi_gpu_config(self):
+        class MultiGPUBackendConfig:
+            gpu = "2,3"
+
+        class MultiGPUConfig:
+            backend = MultiGPUBackendConfig()
+            model = FakeModelConfig()
+
+        manager = GPUManager(MultiGPUConfig())
+        idle = GPUInfo(
+            index="2", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=3, memory_free_mib=16381,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+        busy = GPUInfo(
+            index="3", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=6600, memory_free_mib=9784,
+            temperature_c=65, utilization_percent=40, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[idle, busy]):
+            result = manager.busy_gpus()
+
+        self.assertEqual(result, [busy])
+
+    def test_busy_gpus_respects_custom_threshold(self):
+        manager = GPUManager(FakeConfig())
+        gpu = GPUInfo(
+            index="0", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=100, memory_free_mib=16284,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[gpu]):
+            self.assertEqual(manager.busy_gpus(threshold_mib=50), [gpu])
+            self.assertEqual(manager.busy_gpus(threshold_mib=500), [])
+
 
 if __name__ == "__main__":
     unittest.main()

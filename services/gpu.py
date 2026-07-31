@@ -56,6 +56,24 @@ class GPUManager:
         selected = self._gpu_by_index(gpus, str(self.config.backend.gpu))
         return selected.name if selected else None
 
+    def busy_gpus(self, threshold_mib: int = 500) -> List[GPUInfo]:
+        """Configured backend.gpu index(es) already showing memory usage
+        above threshold_mib. Intended to be checked before this process
+        has loaded a model itself, so any usage found belongs to another
+        process - there is no per-process attribution here (nvidia-smi's
+        basic query doesn't provide it), just "is this GPU already not
+        idle". backend.gpu may be a comma-separated multi-GPU value
+        (e.g. "2,3"); each index is checked independently.
+        """
+        gpus = self.detect_gpus()
+        indexes = [part.strip() for part in str(self.config.backend.gpu).split(",")]
+        busy = []
+        for index in indexes:
+            gpu = self._gpu_by_index(gpus, index)
+            if gpu and gpu.memory_used_mib is not None and gpu.memory_used_mib > threshold_mib:
+                busy.append(gpu)
+        return busy
+
     def driver_version(self) -> str:
         gpus = self.detect_gpus()
         if not gpus:

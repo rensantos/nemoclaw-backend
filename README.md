@@ -252,6 +252,15 @@ temperature, utilization, and driver version.
 `backend gpu current` shows the configured backend GPU, selected CUDA device,
 current model, available memory, CUDA availability, and driver version.
 
+Both `backend status` and `backend gpu current` also show "Other GPU usage":
+a warning if `backend.gpu`'s configured index(es) already have significant
+memory used by another process. `InferenceService` runs this same check
+once at startup and logs a warning if triggered - useful on a shared box
+where another user's job might already occupy the GPU this backend is
+about to use (see `docs/problems.md`). There's no per-process attribution
+(`nvidia-smi`'s basic query doesn't provide it) and nothing is blocked -
+it's visibility, not an enforced lock.
+
 `backend gpu monitor` refreshes utilization, VRAM usage, and temperature until
 Ctrl+C.
 
