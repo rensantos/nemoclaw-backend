@@ -206,9 +206,24 @@ each family's full upstream integration into `transformers`.
 | `mistralai/Mistral-7B-Instruct-v0.1` | **PASS** (revision-pinned) | Same "CVST Tokenizer Badger" Hub re-save pattern as v0.2 (docs/problems.md's earlier entry) - full commit history checked, confirmed the same auto-generated commit exists here too; pinning to the commit before it fixes it. |
 | `mistralai/Mistral-7B-Instruct-v0.3` | FAIL, no fix available | Same tokenizer.json parse error, but its *entire* commit history (34 commits) dates from its initial 2024-05-22 release - it shipped with the modern format from day one, so there is no older revision to pin to. Would need a newer `tokenizers` library - a core-stack change, out of scope. |
 | `mistralai/Mistral-Nemo-Instruct-2407` (12B) | FAIL | Weight-shape mismatch (`[1024,5120]` vs `[1280,5120]`) - Mistral-Nemo introduced an explicit `head_dim` config field that 4.36.0's `MistralConfig`/modeling code doesn't read, so it infers a different (wrong) head dimension than the checkpoint was actually saved with. Architecture-level gap, not fixable by installing a package. |
+| `google/gemma-4-12B-it` / `google/gemma-4-E4B-it` | FAIL | Real current-generation Gemma (24GB/16GB, both ungated - unlike `google/gemma-*-it`, which are gated). Uses a brand-new `gemma4`/`gemma4_unified` architecture (`Gemma4ForConditionalGeneration` etc.), but fails with the identical `GemmaTokenizer does not exist` error as the Gemma-1 mirror below - confirms Gemma is blocked at the transformers-native-support level for every generation, not an artifact of testing an old release. |
 | `alpindale/gemma-7b-it` (ungated Gemma-1 mirror) | FAIL | Needs `GemmaTokenizer`, absent in 4.36.0; confirmed no `trust_remote_code` fallback either (fails identically both ways). Fails before any download either way - the official `google/gemma-*` repos are additionally gated (401, needs a human to accept Google's license on huggingface.co), but that's moot here since the architecture itself isn't loadable regardless. |
 | `tiiuae/falcon-7b-instruct` | **PASS** | Via `trust_remote_code=True` - even though Falcon is now fully native in current `transformers`, the repo still carries its original custom modeling files, which the dynamic-module loader happily serves to an old `transformers` that doesn't have native Falcon support in this exact form. |
 | `microsoft/phi-2` | **FAIL - silent, not a crash** | Loaded with **no exception**, but logged that essentially every `self_attn` weight in the checkpoint was "not used" and every `query_key_value` weight was "newly initialized" (random). The Hub checkpoint now uses split `q_proj`/`k_proj`/`v_proj` naming; 4.36.0's built-in `PhiForCausalLM` expects an older fused `query_key_value` naming. `generate()` "succeeded" and produced pure noise (`"'s.\n:\n:\n\"\n\"\n\"..."`). **This is the most dangerous failure mode found this session**: a naive test that only checks "did it throw" would wrongly call this a pass. Also separately hit (before this): `device_map="auto"` isn't supported by 4.36.0's `PhiForCausalLM` at all (`_no_split_modules` not implemented) - irrelevant for a model this small, worked once pinned to a single GPU, but is its own real gap. |
+| `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B` | FAIL | A second, smaller DeepSeek-R1 distillation (16.4GB, this one on a `Qwen3ForCausalLM` base rather than Llama). `KeyError: 'qwen3'` - inherits the exact Qwen3 architecture block already found above, before any download. |
+
+**On the real DeepSeek flagships (R1, V3, V4):** not attempted, and
+not worth attempting on this box. `deepseek-ai/DeepSeek-R1` is
+**~688GB**, `deepseek-ai/DeepSeek-V4-Flash` is **~160GB**,
+`deepseek-ai/DeepSeek-V4-Pro` is **~865GB** (all real, current Hub
+listings, checked via `HfApi.model_info(files_metadata=True)`, not
+estimated). These are large MoE models; UBI's disk ceiling has topped
+out around ~30GB free all session. This isn't a VRAM/GPU-count
+problem - no combination of the 4 GPUs' 64GB combined VRAM changes
+whether ~700GB of weights fits on a disk that has ~30GB truly free at
+its best moment. Only the small Llama/Qwen-based *distillations*
+DeepSeek publishes alongside these (already covered above) are even
+disk-feasible here.
 
 **Net result:** confirmed working (beyond the Llama-3-8B already
 deployed): `Qwen/Qwen-7B-Chat`, `deepseek-ai/deepseek-llm-7b-chat`,
