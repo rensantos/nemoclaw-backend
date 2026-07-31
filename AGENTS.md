@@ -383,6 +383,54 @@ model for `trust_remote_code` repos; always check generation
 coherence. All testing stayed on GPU 2/3 - GPU 0/1 (another user's
 concurrent job) were never touched.
 
+Qwen version investigation, resolved (2026-07-31, isolated
+`llm-qwen-test` conda env, never touching the production `llm` env -
+`conda create --clone` proved unfaithful for this, see
+`docs/problems.md`): Qwen2 and Qwen2.5 both work under
+`transformers==4.37.0` (the smallest possible bump from the pinned
+4.36.0) on UBI's unchanged `torch==2.0.1+cu117` - `qwen2` was added to
+`CONFIG_MAPPING_NAMES` exactly at 4.37.0, no torch/driver change needed.
+Caught along the way: Qwen2.5-1.5B produces silently-garbage output
+under forced `float16` (what `TransformersEngine`'s `_load_kwargs()`
+hardcodes today) - needs `bfloat16` (the model's own native dtype);
+promoting any Qwen2/2.5 model to `TransformersEngine` needs that code
+fix too, not just a `requirements.txt` bump. **Qwen3 is a confirmed dead
+end for `TransformersEngine`** on UBI's driver: `qwen3` only enters
+`CONFIG_MAPPING_NAMES` at `transformers==4.51.0`, but the
+`torch.compiler`/`torch>=2.1` break was confirmed already present by
+`4.50.0` (binary-searched: `4.49.0` still works) - no version has both.
+Regression-checked on 4.37.0: TinyLlama, Mistral-7B, and
+`Llama-3-8B` (then-live) all still load correctly - not yet promoted to
+`requirements.txt`, since the deployment decision below superseded it.
+
+Ollama-on-UBI (2026-07-31, `docs/ollama-on-ubi-design.md`): Ollama's
+llama.cpp/GGML runtime turned out to have far looser driver requirements
+than `transformers`/`torch` - it runs with genuine GPU acceleration
+directly on UBI under the same pinned driver (470.86), sidestepping the
+Qwen3 dead end above entirely. Root-free install (standard `curl | sh`
+needs sudo, not available on `d3894`): standalone tarball, binary-searched
+to exactly `v0.9.2` - the newest release satisfying two independent
+constraints simultaneously (glibc <= UBI's `2.27`, since Ubuntu 18.04
+predates `2.28`; and the bundled `cuda_v11` runtime, since driver 470.86
+maxes at CUDA 11.4 and `v0.9.3`+ dropped CUDA 11 support entirely).
+Installed at `~/ollama/` on UBI, `OLLAMA_MODELS=~/ollama/models`, started
+manually (mirrors `./backend start`'s own manual-start convention) with a
+`crontab -e` `@reboot` entry for resilience across an actual UBI reboot
+(no systemd without root). `config/config.yaml` now runs `engine: ollama`
+against this same-machine daemon (`ollama_host` stays default
+`http://127.0.0.1:11434`), `model.id: qwen3:8b` - live-validated via
+`/health`, `/v1/models`, and a real `/v1/chat/completions` call with
+correct token usage. `TransformersEngine`'s config (quantization,
+revision, prior `available` entries) is left intact for a one-line
+revert. `docs/architecture.md`'s Target deployment topology updated: the
+UBI Node is no longer `TransformersEngine`-only: `OllamaEngine` now runs
+as a genuine second deployment of itself (UBI Node and Local Node both
+run `OllamaEngine`, on different machines - two Backend Nodes, one
+engine). Not done: no CLI wiring for the Ollama daemon's own lifecycle
+(deliberately out of scope, same boundary as the Local Node case - this
+backend doesn't own Ollama's CUDA context); larger Qwen3 sizes and other
+Ollama model families unexplored beyond confirming the mechanism works.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second

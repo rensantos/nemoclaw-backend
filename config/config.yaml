@@ -13,10 +13,22 @@ backend:
   gpu: "2,3"
   # Which InferenceEngine implementation serves requests.
   # Valid values: transformers | ollama (see docs/ollama-engine-design.md)
-  engine: transformers
+  # ollama: as of 2026-07-31, the Ollama daemon runs on UBI itself (not a
+  # remote Local Node) - see docs/ollama-on-ubi-design.md for why this
+  # became possible (transformers/torch's driver ceiling doesn't apply to
+  # Ollama's llama.cpp/GGML runtime) and how it's deployed (no root,
+  # ollama v0.9.2, cron @reboot). ollama_host below stays default since
+  # the daemon is local to this same machine.
+  engine: ollama
+  ollama_host: http://127.0.0.1:11434
 
 model:
-  id: NousResearch/Meta-Llama-3-8B-Instruct
+  # qwen3:8b via the Ollama daemon on UBI - see docs/ollama-on-ubi-design.md.
+  # This is the answer to the "get the newest Qwen working on UBI"
+  # investigation (docs/problems.md): Qwen3 is a confirmed dead end for
+  # TransformersEngine on UBI's pinned driver, but works fine here since
+  # Ollama doesn't share that constraint chain.
+  id: qwen3:8b
   max_tokens_default: 256
   temperature_default: 0.7
   # TransformersEngine loading precision. Valid values: none | 4bit | 8bit
@@ -29,13 +41,26 @@ model:
   # here (torch.library.impl_abstract missing under pinned torch 2.0.1) -
   # kept at "none" until that's fixed.
   quantization: none
-  # No revision pin needed: NousResearch/Meta-Llama-3-8B-Instruct loads
-  # cleanly at `main` under the pinned transformers==4.36.0 (confirmed
-  # 2026-07-31). Llama-3's much larger vocabulary (128k vs Llama-2/
+  # revision/quantization/available's transformers entries below are for
+  # TransformersEngine specifically and only take effect if backend.engine
+  # is switched back to transformers - inactive while engine: ollama.
+  # NousResearch/Meta-Llama-3-8B-Instruct loads cleanly at `main` under
+  # the pinned transformers==4.36.0 (confirmed 2026-07-31); no revision
+  # pin needed. Llama-3's much larger vocabulary (128k vs Llama-2/
   # Mistral's 32k) makes its fp16 footprint exceed one 16GB card with no
   # headroom to spare - hence backend.gpu above spans two GPUs.
   revision: ""
   available:
+    - id: qwen3:8b
+      name: Qwen3 8B (Ollama, live default - docs/ollama-on-ubi-design.md)
+      path: qwen3:8b
+      engine: ollama
+      device: cuda
+    - id: qwen3:1.7b
+      name: Qwen3 1.7B (Ollama, lighter validated fallback)
+      path: qwen3:1.7b
+      engine: ollama
+      device: cuda
     - id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       name: TinyLlama 1.1B Chat
       path: TinyLlama/TinyLlama-1.1B-Chat-v1.0

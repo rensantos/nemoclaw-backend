@@ -229,10 +229,13 @@ disk-feasible here.
 deployed): `Qwen/Qwen-7B-Chat`, `deepseek-ai/deepseek-llm-7b-chat`,
 `deepseek-ai/deepseek-coder-6.7b-instruct`,
 `mistralai/Mistral-7B-Instruct-v0.1`, `tiiuae/falcon-7b-instruct`.
-None deployed - `NousResearch/Meta-Llama-3-8B-Instruct` remains the
-live default (most recent architecture confirmed working). Recorded
-here as validated options for a future model switch without needing
-to re-run this compatibility research.
+None of these were deployed to replace `NousResearch/Meta-Llama-3-8B-
+Instruct` as `TransformersEngine`'s configured model at the time. Recorded
+here as validated options for a future `TransformersEngine` model switch
+without needing to re-run this compatibility research. (UBI's live
+default has since moved to `OllamaEngine`/`qwen3:8b` - see
+`docs/ollama-on-ubi-design.md` - but `TransformersEngine`'s config and
+this research both remain intact for a one-line revert.)
 
 **Methodology note:** for `trust_remote_code=True` repos, "did the
 process exit 0" is not sufficient evidence of a working model - the
@@ -240,6 +243,85 @@ Phi-2 case shows a load can silently substitute random weights for a
 naming mismatch and still complete. Always inspect the actual
 `generate()` output for coherence, not just the absence of a
 traceback.
+
+### Compatibility sweep follow-up (2026-07-31, same session continued)
+
+Additional candidates tested after the table above, using the same
+`probe_model.py` methodology:
+
+| Model | Result | Why |
+|---|---|---|
+| `Qwen/Qwen-14B-Chat` | **PASS** | Same Qwen1 `trust_remote_code` path as `Qwen-7B-Chat` above, ~28GB. This is the practical ceiling for the Qwen1 line specifically - Qwen1.5+ stays blocked per the table above, so 14B is "the biggest Qwen this stack can run" until the Qwen2/2.5 fix below. |
+| `Qwen/Qwen-72B-Chat` | Not attempted (size-checked only) | ~144.6GB - same disk wall as the DeepSeek flagships above, no GPU/VRAM combination changes this. |
+| `upstage/SOLAR-10.7B-Instruct-v1.0` | **PASS** | Depth-upscaled Llama architecture (plain `llama` model type) - no `trust_remote_code`, no revision pin, loads at `main`. |
+| `01-ai/Yi-1.5-9B-Chat` | **SUSPECT - not a clean pass** | Loads with no exception, but `generate()` output has no whitespace between words at all. Same failure category as the Phi-2 case above (silent, not a crash) - likely a tokenizer-decode quirk in Yi's SentencePiece config under this old `transformers`, not verified further. Do not treat as validated without more investigation. |
+| `HuggingFaceH4/zephyr-7b-beta` | **PASS** | `mistral` architecture, no `trust_remote_code`, no revision pin. |
+
+**Superseded by the Qwen2/Qwen2.5 finding below:** the "Qwen1.5+ is
+blocked" conclusion in the table above was later narrowed, not
+overturned - see the Qwen version investigation section below for what
+actually changes it and what doesn't (Qwen3 stays blocked; Qwen2/2.5
+don't, with a one-minor-version `transformers` bump).
+
+Queued but never tested (architecture-checked via `config.json` only, all
+need `trust_remote_code=True` and 4.36.0's native registry lacks the
+class either way - untested whether any ships a working fallback the way
+Falcon/Qwen1 did): `NousResearch/Nous-Hermes-2-Mistral-7B-DPO` (plain
+`mistral`, should behave like the other Mistral finetunes above),
+`THUDM/chatglm3-6b`, `internlm/internlm2-chat-7b`,
+`baichuan-inc/Baichuan2-13B-Chat`, `stabilityai/stablelm-2-12b-chat`,
+`bigcode/starcoder2-15b-instruct-v0.1`.
+
+### Qwen version investigation: Qwen2/2.5 work, Qwen3 is a confirmed dead end (2026-07-31)
+
+Separate from the "no native Qwen support at all in 4.36.0" finding
+above: is there a `transformers` version between the pinned `4.36.0` and
+the known-broken `4.51.0`+ (`docs/problems.md`'s driver section) that
+adds Qwen support without hitting the `torch.compiler`/`torch>=2.1`
+break? Tested in an isolated `llm-qwen-test` conda env, never touching
+the production `llm` env `./backend` depends on (**note:** `conda create
+--clone` is not reliable for this - it silently reconstructed a stale
+conda-recorded `torch==1.12.1` instead of the actual pip-installed
+`torch==2.0.1+cu117` running in production; build test envs with an
+explicit `pip install torch==2.0.1+cu117 --index-url
+https://download.pytorch.org/whl/cu117` instead).
+
+- **`qwen2` enters `CONFIG_MAPPING_NAMES` at exactly `transformers==
+  4.37.0`** - one minor version above the pinned `4.36.0`. Confirmed
+  working end-to-end: `Qwen/Qwen2-0.5B-Instruct` and
+  `Qwen/Qwen2.5-1.5B-Instruct` both load and `generate()` coherently
+  under `4.37.0` + the unchanged `torch==2.0.1+cu117`. No driver or
+  torch change needed for Qwen2/2.5 at all.
+- **Real catch:** `Qwen/Qwen2.5-1.5B-Instruct` produces silent garbage
+  (`"!!!!!!..."`) when force-loaded in `float16` - which is what
+  `engines/transformers_engine.py`'s `_load_kwargs()` hardcodes for
+  every model today, regardless of the checkpoint's native dtype.
+  Switching to `torch_dtype=torch.bfloat16` (the dtype in the model's
+  own `config.json`) fixes it completely. `Qwen2-0.5B-Instruct`
+  tolerated `float16` fine, so this is likely a scale/checkpoint-specific
+  overflow, not universal - same "no crash isn't proof of a working
+  model" lesson as the Phi-2/Yi-1.5 cases above, just for dtype instead
+  of weight-naming. **Promoting any Qwen2/2.5 model into
+  `TransformersEngine` needs a `_load_kwargs()` code change, not just a
+  `requirements.txt` bump.**
+- **`qwen3` is a confirmed dead end, not "not yet tried."** `qwen3` only
+  enters `CONFIG_MAPPING_NAMES` at exactly `transformers==4.51.0`. The
+  `torch.compiler`/`torch>=2.1` break (`AttributeError: module 'torch'
+  has no attribute 'compiler'`, raised while importing
+  `transformers.models.llama.modeling_llama`, which Qwen3 also depends
+  on) was binary-searched and confirmed already present at `4.50.0`, with
+  `4.49.0` the last version that still works - strictly before Qwen3
+  support ever existed at any version. No `transformers` version has
+  both. Would need a driver upgrade (no sudo on UBI) to ever change this.
+- **Regression-checked on `4.37.0`:** `TinyLlama`,
+  `mistralai/Mistral-7B-Instruct-v0.2` (revision-pinned), and
+  `NousResearch/Meta-Llama-3-8B-Instruct` (then-live) all still load and
+  generate coherently - no regression from the `4.36.0` -> `4.37.0` bump
+  found. **Not promoted to `requirements.txt`** - the Ollama-on-UBI
+  deployment (`docs/ollama-on-ubi-design.md`) reaches actual Qwen3 more
+  directly and became the live choice instead; this `4.37.0` finding
+  remains available if `TransformersEngine`-served Qwen2/2.5 is wanted
+  later.
 
 ### If reproducing/verifying this
 

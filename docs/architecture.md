@@ -91,8 +91,19 @@ alone is ambiguous and should be avoided in docs where precision matters.
 
 Three Backend Nodes are targeted:
 
-- **UBI Node** (`ubi-a4000`, RTX A4000, Ubuntu 18) -> `TransformersEngine`.
-- **Local Node** -> `OllamaEngine`. Ollama is not deployed on the UBI Node.
+- **UBI Node** (`ubi-a4000`, RTX A4000, Ubuntu 18) -> `TransformersEngine`
+  or `OllamaEngine`, single active engine per `backend.engine` as always.
+  As of 2026-07-31, UBI runs `OllamaEngine` against an Ollama daemon
+  installed directly on UBI itself (root-free install, see
+  `docs/ollama-on-ubi-design.md`) — this was undecided/assumed-not-viable
+  until then, since Ollama's driver requirements turned out to be far
+  looser than `transformers`/`torch`'s (`docs/problems.md`). This is what
+  makes Qwen3 servable on UBI at all — a confirmed dead end for
+  `TransformersEngine` given UBI's pinned driver.
+- **Local Node** -> `OllamaEngine`, running on Core/the frontend's own
+  machine. Distinct deployment of the same engine from UBI's — a Backend
+  Node is one engine on one machine, so "UBI running OllamaEngine" and
+  "Local Node running OllamaEngine" are two separate nodes, not one.
 - **Remote API Node** -> `OpenAICompatibleEngine` -> OpenAI / Gemini /
   future compatible providers. This engine adapts remote OpenAI-compatible
   services into the Backend contract, so Core sees a Backend Node, not
@@ -102,9 +113,10 @@ Physical placement: the UBI Node is the only Backend Node reached over the
 network from wherever Core/the frontend runs — it lives on the RTX A4000
 box, remote to everything else. The Local Node and the Remote API Node are
 both intended to run on the same machine as Core/the frontend itself, not
-on UBI and not on a separate third machine. This is why OllamaEngine and
-OpenAICompatibleEngine live-validation happens on that machine, not on
-UBI. Core/the frontend stays model-agnostic either way — it delivers a
+on a separate third machine. `OpenAICompatibleEngine` live-validation still
+only happens on that machine, not on UBI — `OllamaEngine` is now validated
+on both, since it runs as a Backend Node in both places. Core/the frontend
+stays model-agnostic either way — it delivers a
 prompt to whichever node/model it is configured to target; that
 node+model selection is, at least initially, a manual Core/frontend-side
 configuration choice (base_url + model id), not runtime logic this
