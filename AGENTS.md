@@ -470,6 +470,28 @@ is blocked - this is visibility, not an enforced lock, live-verified by
 triggering a real warning off the Ollama daemon's own still-warm
 `qwen3:32b` session.
 
+Shared-GPU busy check, enforcement follow-up (2026-07-31, same day):
+the above was warn-only - `./backend start` would proceed onto a busy
+GPU regardless. New `GPUManager.idle_alternative_gpus()` (GPUs outside
+`backend.gpu`'s configured indexes that are themselves idle) pairs with
+`busy_gpus()` in a new `cli._check_gpu_before_start()`: if the
+configured GPU is busy and an idle alternative exists elsewhere,
+`./backend start` **refuses outright** (non-zero exit, telling the
+operator which GPU(s) are idle so `backend.gpu` can be repointed) rather
+than starting on top of someone else's job. If no idle alternative
+exists anywhere on the box, it doesn't just refuse - it asks for
+interactive confirmation (`typer.confirm`) instead, since there's no
+better option to suggest. New `--force`/`-f` flag on both `start` and
+`restart` (which passes it through) skips the check entirely for
+scripted/non-interactive use. Live-verified on UBI: warmed
+`qwen3:32b`'s VRAM, confirmed `./backend start` refused (exit 1, GPU
+0/1 correctly detected as idle alternatives, no server process left
+running) and `./backend start --force` started successfully anyway. The
+interactive confirm-prompt branch is unit-tested with a mocked
+`typer.confirm` (not live-triggered - doing so for real would require
+occupying all 4 GPUs, including GPU 0/1, which this project has
+deliberately never touched).
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second

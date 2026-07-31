@@ -320,6 +320,22 @@ Log: /home/renatobox/ubi-a4000/logs/backend.log
 Health: ok
 ```
 
+Before actually starting, `./backend start` checks whether `backend.gpu`'s
+configured index(es) already show significant usage from another process
+(see the "Other GPU usage" note under GPU Management below). If so:
+
+- an idle GPU exists elsewhere on the box: **refuses to start** and exits
+  non-zero, telling you which GPU(s) are idle so you can update
+  `backend.gpu` and retry - or rerun with `--force` to start on the busy
+  GPU anyway.
+- no idle GPU exists anywhere: **asks for interactive confirmation**
+  ("Continue starting on the busy GPU(s) anyway?") instead of refusing
+  outright, since there's no alternative to suggest.
+- `--force` / `-f` skips this check entirely, no prompt.
+
+`./backend restart` passes `--force` through to the `start` step the same
+way.
+
 Wrapper command:
 
 ```bash

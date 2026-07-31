@@ -57,8 +57,12 @@ def _install_typer_stub():
     typer_stub.Typer = FakeTyper
     typer_stub.Context = FakeContext
     typer_stub.Exit = FakeExit
+    def confirm(*args, **kwargs):
+        return False
+
     typer_stub.Option = option
     typer_stub.echo = echo
+    typer_stub.confirm = confirm
     sys.modules["typer"] = typer_stub
 
 
@@ -502,6 +506,50 @@ class CliHelperTests(unittest.TestCase):
         decoded = json.loads(output.getvalue())
         self.assertEqual(decoded["benchmark"], "throughput")
         self.assertEqual(decoded["tokens_per_second"], 10.0)
+
+
+class CheckGpuBeforeStartTests(unittest.TestCase):
+    def _gpu(self, index, used_mib):
+        return GPUInfo(
+            index=index, name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=used_mib, memory_free_mib=16384 - used_mib,
+            temperature_c=50, utilization_percent=10, driver_version="470.86",
+        )
+
+    def test_proceeds_when_no_gpu_busy(self):
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=[]):
+            self.assertTrue(cli._check_gpu_before_start())
+
+    def test_force_skips_check_entirely(self):
+        busy = [self._gpu("2", 7000)]
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=busy), \
+                mock.patch.object(cli.gpu_manager, "idle_alternative_gpus") as alt:
+            self.assertTrue(cli._check_gpu_before_start(force=True))
+        alt.assert_not_called()
+
+    def test_refuses_when_idle_alternative_exists(self):
+        busy = [self._gpu("2", 7000)]
+        idle = [self._gpu("0", 1)]
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=busy), \
+                mock.patch.object(cli.gpu_manager, "idle_alternative_gpus", return_value=idle), \
+                mock.patch.object(cli.typer, "confirm") as confirm:
+            self.assertFalse(cli._check_gpu_before_start())
+        confirm.assert_not_called()
+
+    def test_asks_permission_when_no_idle_alternative(self):
+        busy = [self._gpu("2", 7000), self._gpu("3", 6500)]
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=busy), \
+                mock.patch.object(cli.gpu_manager, "idle_alternative_gpus", return_value=[]), \
+                mock.patch.object(cli.typer, "confirm", return_value=True) as confirm:
+            self.assertTrue(cli._check_gpu_before_start())
+        confirm.assert_called_once()
+
+    def test_declining_permission_refuses_to_start(self):
+        busy = [self._gpu("2", 7000)]
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=busy), \
+                mock.patch.object(cli.gpu_manager, "idle_alternative_gpus", return_value=[]), \
+                mock.patch.object(cli.typer, "confirm", return_value=False):
+            self.assertFalse(cli._check_gpu_before_start())
 
 
 if __name__ == "__main__":

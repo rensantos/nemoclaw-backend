@@ -150,6 +150,62 @@ class GPUManagerTests(unittest.TestCase):
             self.assertEqual(manager.busy_gpus(threshold_mib=50), [gpu])
             self.assertEqual(manager.busy_gpus(threshold_mib=500), [])
 
+    def test_idle_alternative_gpus_excludes_configured_index(self):
+        # FakeConfig.gpu == "0" - GPU 0 itself should never appear as its
+        # own "alternative", even though it's idle here.
+        manager = GPUManager(FakeConfig())
+        configured_idle = GPUInfo(
+            index="0", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=1, memory_free_mib=16383,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+        other_idle = GPUInfo(
+            index="1", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=3, memory_free_mib=16381,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[configured_idle, other_idle]):
+            result = manager.idle_alternative_gpus()
+
+        self.assertEqual(result, [other_idle])
+
+    def test_idle_alternative_gpus_excludes_busy_non_configured_gpus(self):
+        manager = GPUManager(FakeConfig())
+        other_busy = GPUInfo(
+            index="1", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=6600, memory_free_mib=9784,
+            temperature_c=65, utilization_percent=40, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[other_busy]):
+            self.assertEqual(manager.idle_alternative_gpus(), [])
+
+    def test_idle_alternative_gpus_handles_multi_gpu_config(self):
+        class MultiGPUBackendConfig:
+            gpu = "2,3"
+
+        class MultiGPUConfig:
+            backend = MultiGPUBackendConfig()
+            model = FakeModelConfig()
+
+        manager = GPUManager(MultiGPUConfig())
+        gpu0 = GPUInfo(
+            index="0", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=1, memory_free_mib=16383,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+        gpu2_configured = GPUInfo(
+            index="2", name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=1, memory_free_mib=16383,
+            temperature_c=40, utilization_percent=0, driver_version="470.86",
+        )
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[gpu0, gpu2_configured]):
+            result = manager.idle_alternative_gpus()
+
+        self.assertEqual(result, [gpu0])
+
 
 if __name__ == "__main__":
     unittest.main()

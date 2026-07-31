@@ -494,6 +494,47 @@ def main(ctx: typer.Context):
         typer.echo(ctx.get_help())
 
 
+def _check_gpu_before_start(force: bool = False) -> bool:
+    """Returns True if it's OK to proceed starting the backend.
+
+    backend.gpu's configured index(es) already showing significant memory
+    usage means another process is using them (checked before this
+    backend has loaded anything itself - see services/gpu.py's
+    busy_gpus()). Default: refuse outright if an idle alternative GPU
+    exists elsewhere on the box (a config change is the right fix, not
+    starting on top of someone else's job). If no idle alternative
+    exists anywhere, don't just refuse - alert clearly and ask for
+    interactive permission to continue anyway. --force skips both the
+    refusal and the prompt.
+    """
+    busy = gpu_manager.busy_gpus()
+    if not busy:
+        return True
+
+    typer.echo("WARNING: configured GPU(s) already in use by another process:")
+    for gpu in busy:
+        typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
+
+    if force:
+        typer.echo("--force set, starting anyway.")
+        return True
+
+    alternatives = gpu_manager.idle_alternative_gpus()
+    if alternatives:
+        typer.echo("Idle GPU(s) available instead:")
+        for gpu in alternatives:
+            typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
+        typer.echo(
+            "Refusing to start on a busy GPU while an idle alternative "
+            "exists. Update backend.gpu in config/config.yaml and try "
+            "again, or rerun with --force to override."
+        )
+        return False
+
+    typer.echo("No idle GPU alternative detected on this box.")
+    return typer.confirm("Continue starting on the busy GPU(s) anyway?")
+
+
 @app.command()
 def start(
     wait: bool = typer.Option(
@@ -506,6 +547,13 @@ def start(
         "--timeout",
         min=1,
         help="Seconds to wait for /health.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Start even if the configured GPU already shows usage from "
+        "another process, skipping the check/prompt entirely.",
     ),
 ):
     """Start the backend in the background."""
@@ -520,6 +568,10 @@ def start(
         typer.echo("Port open: {}".format("yes" if state.port_open else "no"))
         typer.echo("Use './backend status' for details")
         return
+
+    if not _check_gpu_before_start(force=force):
+        typer.echo("Not starting.")
+        raise typer.Exit(code=1)
 
     RUN_DIR.mkdir(exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
@@ -591,10 +643,17 @@ def restart(
         min=1,
         help="Seconds to wait for /health.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Start even if the configured GPU already shows usage from "
+        "another process, skipping the check/prompt entirely.",
+    ),
 ):
     """Restart the backend."""
     stop()
-    start(wait=wait, timeout=timeout)
+    start(wait=wait, timeout=timeout, force=force)
 
 
 @app.command()

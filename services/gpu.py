@@ -74,6 +74,22 @@ class GPUManager:
                 busy.append(gpu)
         return busy
 
+    def idle_alternative_gpus(self, threshold_mib: int = 500) -> List[GPUInfo]:
+        """GPUs on this box NOT among backend.gpu's configured index(es)
+        that are themselves idle - genuine alternatives a human could
+        reconfigure backend.gpu to use instead of a busy configured GPU.
+        Pairs with busy_gpus() to decide whether "no other way" applies.
+        """
+        gpus = self.detect_gpus()
+        configured = {part.strip() for part in str(self.config.backend.gpu).split(",")}
+        return [
+            gpu
+            for gpu in gpus
+            if str(gpu.index) not in configured
+            and gpu.memory_used_mib is not None
+            and gpu.memory_used_mib <= threshold_mib
+        ]
+
     def driver_version(self) -> str:
         gpus = self.detect_gpus()
         if not gpus:
