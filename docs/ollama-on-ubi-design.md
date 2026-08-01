@@ -223,3 +223,44 @@ remain validated options, listed in `config/config.yaml`'s
 `llama3.2-vision:11b` was pulled (started this update from ~24GB free
 after deleting every other model) - check `df -h` before pulling
 anything else on this shared box.
+
+## Update 2026-08-01 (same day): live default switched to qwen3:30b; qwen3.5 blocked
+
+Tried `qwen3.5:35b` (24GB, multimodal) first, aiming for its 256K
+context - **blocked**, `412: requires a newer version of Ollama`,
+confirmed via a direct pull attempt (fails at the manifest stage, no
+weight download). Same wall as `gemma4` above; this generalizes the
+finding from "a `gemma4` quirk" to "any architecture needing Ollama's
+newer generic multimodal engine is blocked on this pinned `v0.9.2`."
+Root cause is UBI's glibc 2.27 (Ubuntu 18.04) + driver 470.86 (CUDA
+11.4 max) - the same ceiling already blocking Qwen3 under
+`TransformersEngine` (`docs/problems.md`) and `bitsandbytes`. A real
+fix needs an OS/driver upgrade (agreed in principle with the user,
+Ubuntu 24.04 + accompanying driver reinstall - RTX A4000/Ampere has no
+hardware blocker against a current driver) - not yet scheduled.
+
+Pivoted to `qwen3:30b` (MoE, `qwen3moe` architecture) instead: **262,144
+native context**, confirmed via `ollama show qwen3:30b` directly on
+UBI - much larger than dense `qwen3` (32b/8b/1.7b, 40,960; these are
+genuinely different context ceilings despite the shared model name).
+`llama3.2-vision:11b` was deleted to make room. `model.id` is now
+`qwen3:30b`, live-validated via `/health`, `/v1/models`, a real
+`/v1/chat/completions` call, and the full test suite.
+
+**Found and documented, not fixed:** `qwen3:30b` does not honor
+`"think": false` - verified by calling the raw Ollama daemon directly
+(bypassing this backend entirely), reasoning trace still appears
+regardless. Likely this MoE variant's chat template lacks the
+enable/disable-thinking conditional dense `qwen3` has. Not a bug in
+`OllamaEngine._apply_think()` - there is no request-side workaround.
+`think_default: false` is kept (harmless, correct for other models),
+but on this tag every response carries a ~48-token reasoning preamble
+regardless. `max_tokens_default: 256` absorbs it fine, so nothing
+truncates - unlike the original `qwen3:32b` bug this field was built to
+prevent.
+
+**Disk state:** with only `qwen3:30b` pulled (~18GB), UBI is at **~7.6GB
+free, 100% used** - the tightest this project's disk has been. User has
+adopted a single-model-at-a-time policy on UBI as a direct consequence;
+do not pull a second model without deleting this one first, and check
+`df -h` regardless.

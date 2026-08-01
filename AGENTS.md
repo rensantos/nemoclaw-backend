@@ -561,11 +561,59 @@ are no longer pulled, but remain validated options in
 `config/config.yaml`'s `model.available`. UBI disk: ~18GB free after
 this pull.
 
+Live default switched to qwen3:30b (2026-08-01, same day): tried
+`qwen3.5:35b` first (24GB, multimodal) - **blocked**, same `412:
+requires a newer version of Ollama` wall as `gemma4`, confirming this
+isn't a `gemma4`-specific quirk but a general multimodal-architecture
+gate on the pinned `v0.9.2` daemon. Both `qwen3.5` and `gemma4` are dead
+ends until a driver/OS upgrade (Ubuntu 18.04's glibc 2.27 + driver
+470.86's CUDA 11.4 ceiling - the same root cause already blocking Qwen3
+under `TransformersEngine` and `bitsandbytes`). User has agreed to
+pursue that upgrade (Ubuntu 24.04 + accompanying driver reinstall, RTX
+A4000/Ampere has no hardware blocker) with whoever administers UBI -
+not yet scheduled, no code dependency on it.
+
+Pivoted to `qwen3:30b` (MoE, `qwen3moe` architecture, ~18GB) as an
+interim default instead: **262,144 native context**, confirmed via
+`ollama show qwen3:30b` directly on UBI - far larger than dense `qwen3`
+(32b/8b/1.7b, 40,960; do not conflate the two, `config/config.yaml`'s
+`model.available` previously had this mistagged as `qwen3:30b-a3b` at
+40,960, now corrected). `llama3.2-vision:11b` was deleted to make room
+(disk was down to 18GB free); `qwen3:30b` alone leaves UBI at **~7.6GB
+free, 100% used** - the tightest this project's disk has ever been.
+User has adopted a deliberate single-model-at-a-time policy on UBI
+until that improves. `model.id` is now `qwen3:30b`, live-validated via
+`/health`, `/v1/models`, a real `/v1/chat/completions` call, and the
+full test suite (141 tests, all passing).
+
+Found live and not fixed (documented, not faked, per this file's rule):
+`qwen3:30b` does **not** honor `"think": false`, unlike `qwen3:32b`
+before it - confirmed by calling the raw Ollama daemon directly
+(`/api/chat` with `"think": false"`), bypassing `OllamaEngine` entirely,
+and still getting a full `<think>` reasoning trace in the response.
+Root cause is presumed to be this MoE variant's chat template lacking
+the enable/disable-thinking conditional dense `qwen3` has - not a
+backend bug, and not something `OllamaEngine._apply_think()` can work
+around from the request side. `think_default: false` is kept anyway
+(harmless, matches the deliberate `qwen3:32b`-era choice, and still
+correct for any other model that *does* honor it) but does not actually
+suppress reasoning for this specific tag. The reasoning preamble
+(~48 tokens for a trivial question) fits comfortably inside
+`max_tokens_default: 256` so nothing truncates, unlike the original
+`qwen3:32b` truncation bug this field was built to fix - just a
+standing token-overhead cost on every request. A real fix likely needs
+a newer Ollama (same upgrade path as above), not attempted this
+session.
+
 Next milestones: Phase 5 Increment 3 (real model load/unload/switch
 behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
 Registry (`docs/future-tasks.md`) — its trigger condition (a real second
 live Backend Node) is now met, motivated by the frontend wanting
 user-facing Local-vs-UBI model choice instead of a static `.env` restart.
+An OS/driver upgrade on UBI (Ubuntu 24.04 + current driver) is agreed
+but unscheduled - would remove the root cause behind the Qwen3.5/gemma4
+Ollama version gate, the `transformers`/Qwen3 dead end, and broken
+`bitsandbytes` all at once.
 
 ## Commands
 
