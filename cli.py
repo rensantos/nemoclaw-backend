@@ -16,7 +16,7 @@ import typer
 from config import (
     config,
 )
-from services.gpu import GPUManager
+from services.gpu import GPUAvailability, GPUManager
 from services.model import ModelManager
 from services.benchmark import BenchmarkError, BenchmarkService
 
@@ -534,6 +534,98 @@ def main(ctx: typer.Context):
         typer.echo(ctx.get_help())
 
 
+def _print_gpu_availability() -> None:
+    """Box-wide census of who is using what, checked dynamically across
+    every detected GPU - no assumption about which indexes are usually
+    busy on this shared machine."""
+    availability = gpu_manager.availability()
+    typer.echo("GPU availability: {}".format(availability.summary_line()))
+    for gpu in availability.in_use:
+        typer.echo(
+            "  GPU {} ('{}'): IN USE - {}, {}".format(
+                gpu.index, gpu.name, _vram_usage(gpu), _percent(gpu.utilization_percent)
+            )
+        )
+    for gpu in availability.free:
+        typer.echo(
+            "  GPU {} ('{}'): free - {}".format(gpu.index, gpu.name, _vram_usage(gpu))
+        )
+
+
+def _check_external_runtime_gpus(force: bool = False) -> bool:
+    """With engine: ollama the backend never loads a model itself - the
+    Ollama daemon does, using whatever devices *it* was launched with.
+    backend.gpu therefore constrains this process only, and says nothing
+    about where the daemon will actually place weights.
+
+    So check the daemon's own CUDA_VISIBLE_DEVICES against the live
+    in-use set. This backend deliberately does not own the daemon's
+    lifecycle (AGENTS.md), so it reports and refuses rather than
+    restarting anything - and prints the exact command to relaunch the
+    daemon pinned to the free GPUs.
+    """
+    if config.backend.engine != "ollama":
+        return True
+
+    from engines.ollama_engine import find_daemon_pids
+
+    pids = find_daemon_pids()
+    if not pids:
+        # Remote daemon, not running, or no pgrep: nothing inspectable.
+        return True
+
+    for pid in pids:
+        unsafe = gpu_manager.unsafe_gpus_for_process(pid)
+        if unsafe is None:
+            typer.echo(
+                "Ollama daemon (PID {}): cannot read its CUDA_VISIBLE_DEVICES; "
+                "GPU exposure unverified.".format(pid)
+            )
+            continue
+        if not unsafe:
+            continue
+
+        typer.echo(
+            "WARNING: the Ollama daemon (PID {}) can reach GPU(s) that "
+            "another process is already using:".format(pid)
+        )
+        for gpu in unsafe:
+            typer.echo(
+                "  GPU {} ('{}'): {}, {}".format(
+                    gpu.index, gpu.name, _vram_usage(gpu), _percent(gpu.utilization_percent)
+                )
+            )
+        typer.echo(
+            "  backend.gpu ({}) does NOT constrain the daemon - it places "
+            "models itself.".format(config.backend.gpu)
+        )
+
+        free = gpu_manager.availability().free
+        if free:
+            typer.echo(
+                "  Restart the daemon pinned to the free GPU(s):\n"
+                "    CUDA_VISIBLE_DEVICES={} ollama serve".format(
+                    ",".join(str(gpu.index) for gpu in free)
+                )
+            )
+        else:
+            typer.echo("  No free GPU is available on this box right now.")
+
+        if force:
+            typer.echo(
+                "--force set: starting anyway. The daemon may still place a "
+                "model on another user's GPU."
+            )
+            return True
+        typer.echo(
+            "Refusing to start while the model runtime can reach a busy GPU. "
+            "Restart the daemon as shown above, or rerun with --force."
+        )
+        return False
+
+    return True
+
+
 def _check_gpu_before_start(force: bool = False) -> bool:
     """Returns True if it's OK to proceed starting the backend.
 
@@ -547,6 +639,11 @@ def _check_gpu_before_start(force: bool = False) -> bool:
     interactive permission to continue anyway. --force skips both the
     refusal and the prompt.
     """
+    _print_gpu_availability()
+
+    if not _check_external_runtime_gpus(force=force):
+        return False
+
     busy = gpu_manager.busy_gpus()
     if not busy:
         return True
@@ -556,7 +653,10 @@ def _check_gpu_before_start(force: bool = False) -> bool:
         typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
 
     if force:
-        typer.echo("--force set, starting anyway.")
+        typer.echo(
+            "--force set: starting anyway, ON TOP of the GPU(s) listed above. "
+            "Another user's job may be disrupted."
+        )
         return True
 
     alternatives = gpu_manager.idle_alternative_gpus()
@@ -730,6 +830,7 @@ def status():
         )
     )))
     _print_busy_gpu_warning()
+    _print_gpu_availability()
     typer.echo("Log: {}".format(LOG_FILE))
 
 
@@ -898,6 +999,9 @@ def gpu_list():
     typer.echo("Detected GPUs")
     for gpu in gpus:
         _print_gpu(gpu)
+
+    typer.echo("")
+    _print_gpu_availability()
 
 
 @gpu_app.command("current")

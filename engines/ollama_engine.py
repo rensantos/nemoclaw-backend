@@ -18,6 +18,7 @@ daemon owns the CUDA context; model_id is mutable from that point on.
 
 import json
 import logging
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -41,6 +42,33 @@ _TAGS_TIMEOUT_SECONDS = 5
 _GENERATE_TIMEOUT_SECONDS = 120
 
 _logger = logging.getLogger(__name__)
+
+
+def find_daemon_pids() -> List[int]:
+    """PIDs of `ollama serve` processes running on this machine.
+
+    Engine-specific knowledge (how to locate this engine's runtime), kept
+    here rather than in GPUManager or the CLI. Returns an empty list when
+    the daemon is remote, absent, or pgrep is unavailable - callers must
+    treat "no pids" as "cannot inspect", not "nothing running".
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "ollama serve"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    pids = []
+    for line in result.stdout.split():
+        try:
+            pids.append(int(line))
+        except ValueError:
+            continue
+    return pids
 
 
 class OllamaEngine(InferenceEngine):

@@ -286,8 +286,23 @@ memory used by another process. `InferenceService` runs this same check
 once at startup and logs a warning if triggered - useful on a shared box
 where another user's job might already occupy the GPU this backend is
 about to use (see `docs/problems.md`). There's no per-process attribution
-(`nvidia-smi`'s basic query doesn't provide it) and nothing is blocked -
-it's visibility, not an enforced lock.
+(`nvidia-smi`'s basic query doesn't provide it).
+
+`backend status` and `backend gpu list` additionally print a **GPU
+availability** census of every card on the box:
+
+```text
+GPU availability: 2 of 4 GPU(s) in use by other processes, 2 free
+  GPU 0 ('RTX A4000'): IN USE - 6658 MiB / 16117 MiB, 80%
+  GPU 1 ('RTX A4000'): IN USE - 6658 MiB / 16117 MiB, 87%
+  GPU 2 ('RTX A4000'): free - 3 MiB / 16117 MiB
+  GPU 3 ('RTX A4000'): free - 3 MiB / 16117 MiB
+```
+
+A GPU counts as in use if **either** its memory (>500 MiB) or its
+utilization (>10%) is above threshold - memory alone misses a
+compute-heavy job with a small resident footprint. Which indexes are busy
+is always determined live; nothing assumes a fixed "safe" pair.
 
 `backend gpu monitor` refreshes utilization, VRAM usage, and temperature until
 Ctrl+C.
@@ -359,7 +374,29 @@ configured index(es) already show significant usage from another process
 - no idle GPU exists anywhere: **asks for interactive confirmation**
   ("Continue starting on the busy GPU(s) anyway?") instead of refusing
   outright, since there's no alternative to suggest.
-- `--force` / `-f` skips this check entirely, no prompt.
+- `--force` / `-f` skips the refusal and the prompt, but is not silent: it
+  names the GPU(s) being overridden and warns that another user's job may
+  be disrupted.
+
+**External model runtimes.** With `engine: ollama` the backend never loads
+a model itself - the Ollama daemon does, using whatever devices *it* was
+launched with. `backend.gpu` constrains only this backend's process, so it
+says nothing about where Ollama will place weights. `./backend start`
+therefore also reads the daemon's own `CUDA_VISIBLE_DEVICES` and refuses
+to start if the daemon can reach a GPU someone else is using:
+
+```text
+WARNING: the Ollama daemon (PID 23823) can reach GPU(s) that another process is already using:
+  GPU 0 ('RTX A4000'): 6658 MiB / 16117 MiB, 80%
+  backend.gpu (2,3) does NOT constrain the daemon - it places models itself.
+  Restart the daemon pinned to the free GPU(s):
+    CUDA_VISIBLE_DEVICES=2,3 ollama serve
+Refusing to start while the model runtime can reach a busy GPU.
+```
+
+The backend reports and refuses rather than restarting the daemon: it does
+not own the daemon's lifecycle, and stopping it would drop other work.
+Pinning the daemon is an operator action.
 
 `./backend restart` passes `--force` through to the `start` step the same
 way.

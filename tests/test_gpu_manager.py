@@ -209,3 +209,131 @@ class GPUManagerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _gpu(index, used=1, util=0, name="RTX A4000"):
+    return GPUInfo(
+        index=index, name=name, memory_total_mib=16384,
+        memory_used_mib=used, memory_free_mib=16384 - used,
+        temperature_c=40, utilization_percent=util, driver_version="470.86",
+    )
+
+
+class GPUUtilizationDetectionTests(unittest.TestCase):
+    """A compute-heavy job with a small resident footprint reads as idle
+    by VRAM alone. Utilization is the second signal that catches it."""
+
+    def test_high_utilization_counts_as_in_use_despite_low_memory(self):
+        manager = GPUManager(FakeConfig())
+        stealthy = _gpu("0", used=120, util=87)
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[stealthy]):
+            self.assertTrue(manager.gpu_is_in_use(stealthy))
+            self.assertEqual(manager.busy_gpus(), [stealthy])
+
+    def test_idle_gpu_is_not_flagged_by_either_signal(self):
+        manager = GPUManager(FakeConfig())
+        idle = _gpu("0", used=3, util=0)
+
+        with mock.patch.object(manager, "detect_gpus", return_value=[idle]):
+            self.assertFalse(manager.gpu_is_in_use(idle))
+            self.assertEqual(manager.busy_gpus(), [])
+
+    def test_unknown_utilization_falls_back_to_memory_only(self):
+        manager = GPUManager(FakeConfig())
+        unknown = _gpu("0", used=3, util=None)
+
+        self.assertFalse(manager.gpu_is_in_use(unknown))
+
+    def test_idle_alternatives_exclude_a_high_utilization_gpu(self):
+        class MultiConfig:
+            backend = types.SimpleNamespace(gpu="0")
+            model = types.SimpleNamespace(id="tiny")
+
+        manager = GPUManager(MultiConfig())
+        gpus = [_gpu("0", used=8000), _gpu("1", used=100, util=95), _gpu("2")]
+
+        with mock.patch.object(manager, "detect_gpus", return_value=gpus):
+            alternatives = manager.idle_alternative_gpus()
+
+        self.assertEqual([gpu.index for gpu in alternatives], ["2"])
+
+
+class GPUAvailabilityTests(unittest.TestCase):
+    def test_availability_splits_all_gpus_dynamically(self):
+        manager = GPUManager(FakeConfig())
+        gpus = [_gpu("0", used=6658, util=80), _gpu("1", used=6658, util=87),
+                _gpu("2"), _gpu("3")]
+
+        with mock.patch.object(manager, "detect_gpus", return_value=gpus):
+            availability = manager.availability()
+
+        self.assertEqual([gpu.index for gpu in availability.in_use], ["0", "1"])
+        self.assertEqual([gpu.index for gpu in availability.free], ["2", "3"])
+        self.assertEqual(availability.total, 4)
+        self.assertIn("2 of 4 GPU(s) in use", availability.summary_line())
+
+    def test_availability_does_not_assume_which_indexes_are_busy(self):
+        """The busy cards are whichever are actually busy - here 2 and 3,
+        the ones this project usually treats as the safe ones."""
+        manager = GPUManager(FakeConfig())
+        gpus = [_gpu("0"), _gpu("1"), _gpu("2", used=9000), _gpu("3", util=99)]
+
+        with mock.patch.object(manager, "detect_gpus", return_value=gpus):
+            availability = manager.availability()
+
+        self.assertEqual([gpu.index for gpu in availability.in_use], ["2", "3"])
+        self.assertEqual([gpu.index for gpu in availability.free], ["0", "1"])
+
+    def test_summary_line_when_no_gpus(self):
+        manager = GPUManager(FakeConfig())
+        with mock.patch.object(manager, "detect_gpus", return_value=[]):
+            self.assertEqual(manager.availability().summary_line(), "No GPUs detected")
+
+
+class ProcessGPUVisibilityTests(unittest.TestCase):
+    """backend.gpu constrains only this process; an external runtime like
+    the Ollama daemon places models using its own visible devices."""
+
+    def _manager_with(self, gpus):
+        manager = GPUManager(FakeConfig())
+        return manager, mock.patch.object(manager, "detect_gpus", return_value=gpus)
+
+    def _environ(self, value):
+        return mock.patch(
+            "builtins.open",
+            mock.mock_open(read_data=value.encode("utf-8")),
+        )
+
+    def test_reads_cuda_visible_devices_from_process_environ(self):
+        manager, detect = self._manager_with([_gpu("0"), _gpu("1")])
+        with detect, self._environ("PATH=/usr/bin\0CUDA_VISIBLE_DEVICES=2,3\0"):
+            self.assertEqual(manager.visible_gpu_indexes_for_process(123), ["2", "3"])
+
+    def test_unset_variable_means_the_process_sees_every_gpu(self):
+        gpus = [_gpu("0"), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect = self._manager_with(gpus)
+        with detect, self._environ("PATH=/usr/bin\0HOME=/root\0"):
+            self.assertEqual(
+                manager.visible_gpu_indexes_for_process(123), ["0", "1", "2", "3"]
+            )
+
+    def test_unreadable_environ_reports_unknown_rather_than_guessing(self):
+        manager, detect = self._manager_with([_gpu("0")])
+        with detect, mock.patch("builtins.open", side_effect=OSError):
+            self.assertIsNone(manager.visible_gpu_indexes_for_process(123))
+            self.assertIsNone(manager.unsafe_gpus_for_process(123))
+
+    def test_flags_busy_gpus_the_process_can_reach(self):
+        gpus = [_gpu("0", used=6658, util=80), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect = self._manager_with(gpus)
+        with detect, self._environ("CUDA_VISIBLE_DEVICES=0,1,2,3\0"):
+            unsafe = manager.unsafe_gpus_for_process(123)
+
+        self.assertEqual([gpu.index for gpu in unsafe], ["0"])
+
+    def test_no_risk_when_process_is_pinned_away_from_the_busy_gpu(self):
+        gpus = [_gpu("0", used=6658, util=80), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect = self._manager_with(gpus)
+        with detect, self._environ("CUDA_VISIBLE_DEVICES=2,3\0"):
+            self.assertEqual(manager.unsafe_gpus_for_process(123), [])

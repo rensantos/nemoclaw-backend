@@ -79,10 +79,27 @@ convention of only touching the two GPUs that aren't another user's shared
 job — check `nvidia-smi` before trusting this is still current, per
 `docs/problems.md`.
 
+> **Known drift, found 2026-08-02 — the deployed daemon does not match
+> this.** The actual UBI daemon (and its `@reboot` crontab entry) runs
+> with `CUDA_VISIBLE_DEVICES=0,1,2,3`, i.e. it can reach *all four* GPUs
+> including another user's. `backend.gpu: "2,3"` does **not** constrain
+> it: under `engine: ollama` the backend never loads a model, so the
+> daemon's own visible-device set is the only thing that decides where
+> weights land. Ollama had been choosing GPU 2/3 because its scheduler
+> picks by free VRAM — luck, not enforcement.
+>
+> `./backend start` now detects this (reads the daemon's
+> `/proc/<pid>/environ`) and refuses to start whenever the daemon can
+> reach a GPU someone else is using, printing the pinned restart command.
+> The backend does not restart the daemon itself — that stays an operator
+> action, and it must be fixed in **both** places: the running process and
+> the `@reboot` crontab line.
+
 **Reboot survival**: a `crontab -e` `@reboot` entry running the same command
 survives an actual UBI reboot without needing root (`cron` itself is a
 user-level facility). An idle Ollama daemon holds no GPU memory until a
-request actually loads a model, so this is safe to leave in place.
+request actually loads a model, so this is safe to leave in place. Note the
+deployed entry currently carries the `0,1,2,3` drift described above.
 
 Stopping it: find the PID (`ps -eo pid,cmd | grep '[o]llama serve'`) and
 `kill <pid>` directly. **Do not use `pkill -f` for this** — confirmed during

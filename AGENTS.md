@@ -691,6 +691,53 @@ model now `404`s); `unload` making chat return `503`; `load` from
 `unloaded` recovering; and `--persist` writing `config.yaml` in both
 directions, ending byte-identical to the committed file.
 
+Shared-GPU safety, external-runtime gap closed (2026-08-02): the
+busy-GPU guard added earlier only ever protected the *backend process*.
+`config.py` sets `CUDA_VISIBLE_DEVICES` from `backend.gpu` for itself,
+but under `engine: ollama` **the backend never loads a model** - the
+Ollama daemon does, using whatever devices *it* was launched with. On UBI
+that daemon runs with `CUDA_VISIBLE_DEVICES=0,1,2,3`, so `backend.gpu:
+"2,3"` constrained nothing that mattered: Ollama could place weights on
+GPU 0/1, another user's cards. It had been landing on 2/3 only because
+its own scheduler picks by free VRAM - luck, not enforcement.
+
+- `GPUManager.gpu_is_in_use()` now treats **either** memory (>500MiB) or
+  **utilization** (>10%) as busy. Memory alone missed a compute-heavy job
+  with a small resident footprint; a false positive (we pick another
+  card) costs far less than a false negative (we land on someone's job).
+  `busy_gpus()` and `idle_alternative_gpus()` both use it.
+- New `GPUManager.availability()` -> `GPUAvailability(in_use, free)`: a
+  census of **every** detected GPU, classified dynamically. It never
+  assumes which indexes are "the busy ones" - verified by a test where
+  GPU 2/3 (this project's usual safe pair) are the busy ones.
+- New `GPUManager.visible_gpu_indexes_for_process(pid)` reads a process's
+  own `CUDA_VISIBLE_DEVICES` from `/proc/<pid>/environ`. An **unset**
+  variable returns every index, because that is CUDA's real default
+  (sees all GPUs); unreadable returns `None` ("unknown"), never a guess.
+  `unsafe_gpus_for_process(pid)` intersects that with the in-use set.
+- New `engines.ollama_engine.find_daemon_pids()` locates `ollama serve`
+  (engine-specific knowledge, so it lives with the engine; `GPUManager`
+  owns the GPU-safety analysis).
+- `cli._check_external_runtime_gpus()` runs before `_check_gpu_before_start`'s
+  existing config check and **refuses to start** when the daemon can reach
+  a busy GPU, printing the exact fix (`CUDA_VISIBLE_DEVICES=<free> ollama
+  serve`). It **reports and refuses rather than restarting the daemon** -
+  this backend deliberately does not own the daemon's lifecycle, and
+  killing it would drop other work.
+- `--force` still bypasses, but is no longer silent: it names the GPUs
+  being overridden and warns that another user's job may be disrupted.
+- `./backend status` and `./backend gpu list` print the availability
+  census ("N of M GPU(s) in use by other processes, K free") with a
+  per-GPU IN USE/free line.
+
+Live-verified on UBI: real detection read `CUDA_VISIBLE_DEVICES=0,1,2,3`
+off both daemon PIDs, and the refusal + `--force` paths were exercised
+against a simulated busy GPU 0/1 (the exact situation observed earlier
+that day). **Not done:** the UBI daemon is still launched with all four
+GPUs visible - fixing that is an operator action (`crontab -e` `@reboot`
+line plus a daemon restart), not a code change, and this backend will now
+refuse to start rather than silently risk it.
+
 Next milestones: Phase 5 worker supervision (the deferred half of
 `docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)
 would unlock `TransformersEngine` lifecycle support and side-by-side

@@ -16,6 +16,28 @@ class GPUInfo:
 
 
 @dataclass
+class GPUAvailability:
+    """Box-wide GPU census: which cards are in use by anyone, which are
+    free. Deliberately says nothing about backend.gpu - this is "what is
+    the state of this shared machine", not "is my configured GPU ok".
+    """
+
+    in_use: List["GPUInfo"]
+    free: List["GPUInfo"]
+
+    @property
+    def total(self) -> int:
+        return len(self.in_use) + len(self.free)
+
+    def summary_line(self) -> str:
+        if self.total == 0:
+            return "No GPUs detected"
+        return "{} of {} GPU(s) in use by other processes, {} free".format(
+            len(self.in_use), self.total, len(self.free)
+        )
+
+
+@dataclass
 class CurrentGPUInfo:
     selected_cuda_device: str
     backend_gpu: str
@@ -56,38 +78,141 @@ class GPUManager:
         selected = self._gpu_by_index(gpus, str(self.config.backend.gpu))
         return selected.name if selected else None
 
-    def busy_gpus(self, threshold_mib: int = 500) -> List[GPUInfo]:
-        """Configured backend.gpu index(es) already showing memory usage
-        above threshold_mib. Intended to be checked before this process
-        has loaded a model itself, so any usage found belongs to another
-        process - there is no per-process attribution here (nvidia-smi's
-        basic query doesn't provide it), just "is this GPU already not
-        idle". backend.gpu may be a comma-separated multi-GPU value
-        (e.g. "2,3"); each index is checked independently.
+    def gpu_is_in_use(
+        self,
+        gpu: GPUInfo,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> bool:
+        """Whether a GPU shows signs of someone else's work.
+
+        Memory alone is not enough: a compute-heavy job with a small
+        resident footprint reads as idle by VRAM but is very much in use.
+        Either signal crossing its threshold counts as busy, because the
+        cost of a false positive (we pick a different card) is far lower
+        than a false negative (we land on another user's job).
+        """
+        if gpu.memory_used_mib is not None and gpu.memory_used_mib > threshold_mib:
+            return True
+        if (
+            gpu.utilization_percent is not None
+            and gpu.utilization_percent > utilization_threshold_percent
+        ):
+            return True
+        return False
+
+    def availability(
+        self,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> GPUAvailability:
+        """Census of every GPU on the box, split into in-use and free.
+
+        Checks all detected GPUs dynamically - it never assumes which
+        indexes are "the busy ones" on this shared machine.
+        """
+        in_use, free = [], []
+        for gpu in self.detect_gpus():
+            target = in_use if self.gpu_is_in_use(
+                gpu, threshold_mib, utilization_threshold_percent
+            ) else free
+            target.append(gpu)
+        return GPUAvailability(in_use=in_use, free=free)
+
+    def busy_gpus(
+        self,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> List[GPUInfo]:
+        """Configured backend.gpu index(es) already showing usage by
+        another process. Intended to be checked before this process has
+        loaded a model itself, so any usage found belongs to someone else
+        - there is no per-process attribution here (nvidia-smi's basic
+        query doesn't provide it), just "is this GPU already not idle".
+        backend.gpu may be a comma-separated multi-GPU value (e.g. "2,3");
+        each index is checked independently.
         """
         gpus = self.detect_gpus()
         indexes = [part.strip() for part in str(self.config.backend.gpu).split(",")]
         busy = []
         for index in indexes:
             gpu = self._gpu_by_index(gpus, index)
-            if gpu and gpu.memory_used_mib is not None and gpu.memory_used_mib > threshold_mib:
+            if gpu and self.gpu_is_in_use(
+                gpu, threshold_mib, utilization_threshold_percent
+            ):
                 busy.append(gpu)
         return busy
 
-    def idle_alternative_gpus(self, threshold_mib: int = 500) -> List[GPUInfo]:
+    def idle_alternative_gpus(
+        self,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> List[GPUInfo]:
         """GPUs on this box NOT among backend.gpu's configured index(es)
         that are themselves idle - genuine alternatives a human could
         reconfigure backend.gpu to use instead of a busy configured GPU.
         Pairs with busy_gpus() to decide whether "no other way" applies.
         """
-        gpus = self.detect_gpus()
         configured = {part.strip() for part in str(self.config.backend.gpu).split(",")}
         return [
             gpu
-            for gpu in gpus
+            for gpu in self.detect_gpus()
             if str(gpu.index) not in configured
-            and gpu.memory_used_mib is not None
-            and gpu.memory_used_mib <= threshold_mib
+            and not self.gpu_is_in_use(
+                gpu, threshold_mib, utilization_threshold_percent
+            )
+        ]
+
+    def visible_gpu_indexes_for_process(self, pid) -> Optional[List[str]]:
+        """Which GPU indexes a running process can actually reach, read
+        from its own CUDA_VISIBLE_DEVICES in /proc/<pid>/environ.
+
+        Returns every detected index when the variable is unset - that is
+        CUDA's real default (a process sees all GPUs), and treating "unset"
+        as "restricted" would be exactly the wrong way to be wrong here.
+        Returns None when the environment cannot be read at all (no /proc,
+        process gone, not permitted), so callers can distinguish "sees
+        everything" from "unknown" instead of guessing.
+        """
+        try:
+            with open("/proc/{}/environ".format(pid), "rb") as environ_file:
+                raw = environ_file.read().decode("utf-8", "replace")
+        except (OSError, ValueError):
+            return None
+
+        all_indexes = [str(gpu.index) for gpu in self.detect_gpus()]
+        for entry in raw.split("\0"):
+            if entry.startswith("CUDA_VISIBLE_DEVICES="):
+                value = entry.split("=", 1)[1].strip()
+                if not value:
+                    return []
+                return [part.strip() for part in value.split(",") if part.strip()]
+        return all_indexes
+
+    def unsafe_gpus_for_process(
+        self,
+        pid,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> Optional[List[GPUInfo]]:
+        """GPUs that `pid` can reach AND that someone else is already
+        using - i.e. cards this process could disrupt if its scheduler
+        chose them.
+
+        This is the check that matters for an external model runtime like
+        the Ollama daemon: backend.gpu constrains only this backend's own
+        process, while the daemon places weights using whatever devices
+        *it* was launched with. Returns None when visibility is unknown.
+        """
+        visible = self.visible_gpu_indexes_for_process(pid)
+        if visible is None:
+            return None
+        visible_set = set(visible)
+        return [
+            gpu
+            for gpu in self.detect_gpus()
+            if str(gpu.index) in visible_set
+            and self.gpu_is_in_use(gpu, threshold_mib, utilization_threshold_percent)
         ]
 
     def driver_version(self) -> str:

@@ -1,4 +1,5 @@
 import importlib
+import dataclasses
 import io
 import json
 import sys
@@ -588,6 +589,142 @@ class CheckGpuBeforeStartTests(unittest.TestCase):
                 mock.patch.object(cli.gpu_manager, "idle_alternative_gpus", return_value=[]), \
                 mock.patch.object(cli.typer, "confirm", return_value=False):
             self.assertFalse(cli._check_gpu_before_start())
+
+    def test_force_warns_loudly_instead_of_bypassing_silently(self):
+        busy = [self._gpu("2", 7000)]
+        output = io.StringIO()
+        with mock.patch.object(cli.gpu_manager, "busy_gpus", return_value=busy), \
+                redirect_stdout(output):
+            self.assertTrue(cli._check_gpu_before_start(force=True))
+
+        printed = output.getvalue()
+        self.assertIn("GPU 2", printed)
+        self.assertIn("ON TOP", printed)
+        self.assertIn("Another user's job may be disrupted", printed)
+
+
+def _config_with_engine(engine):
+    """Config and BackendConfig are both frozen dataclasses, so rebuild
+    them and patch the module-level name rather than a field."""
+    return dataclasses.replace(
+        cli.config, backend=dataclasses.replace(cli.config.backend, engine=engine)
+    )
+
+
+class ExternalRuntimeGPUCheckTests(unittest.TestCase):
+    """backend.gpu constrains only the backend process. With engine:
+    ollama the daemon places models using its own visible devices, so it
+    needs its own check."""
+
+    def _gpu(self, index, used=1, util=0):
+        return GPUInfo(
+            index=index, name="RTX A4000", memory_total_mib=16384,
+            memory_used_mib=used, memory_free_mib=16384 - used,
+            temperature_c=50, utilization_percent=util, driver_version="470.86",
+        )
+
+    def _run(self, unsafe, free, force=False, engine="ollama", pids=(4321,)):
+        availability = cli.GPUAvailability(in_use=list(unsafe), free=list(free))
+        output = io.StringIO()
+        with mock.patch.object(cli, "config", _config_with_engine(engine)), \
+                mock.patch(
+                    "engines.ollama_engine.find_daemon_pids", return_value=list(pids)
+                ), \
+                mock.patch.object(
+                    cli.gpu_manager, "unsafe_gpus_for_process", return_value=list(unsafe)
+                ), \
+                mock.patch.object(
+                    cli.gpu_manager, "availability", return_value=availability
+                ), \
+                redirect_stdout(output):
+            result = cli._check_external_runtime_gpus(force=force)
+        return result, output.getvalue()
+
+    def test_refuses_when_daemon_can_reach_a_busy_gpu(self):
+        unsafe = [self._gpu("0", 6658, 80)]
+        free = [self._gpu("2"), self._gpu("3")]
+
+        allowed, printed = self._run(unsafe, free)
+
+        self.assertFalse(allowed)
+        self.assertIn("GPU 0", printed)
+        self.assertIn("does NOT constrain the daemon", printed)
+        # Must hand the operator the exact fix, pinned to the free GPUs.
+        self.assertIn("CUDA_VISIBLE_DEVICES=2,3 ollama serve", printed)
+
+    def test_allows_when_daemon_is_pinned_away_from_busy_gpus(self):
+        allowed, printed = self._run(unsafe=[], free=[self._gpu("2")])
+
+        self.assertTrue(allowed)
+        self.assertEqual(printed, "")
+
+    def test_force_warns_but_proceeds(self):
+        unsafe = [self._gpu("1", 6658, 87)]
+        allowed, printed = self._run(unsafe, free=[self._gpu("3")], force=True)
+
+        self.assertTrue(allowed)
+        self.assertIn("--force set", printed)
+        self.assertIn("another user's GPU", printed)
+
+    def test_reports_when_no_free_gpu_exists_to_suggest(self):
+        unsafe = [self._gpu("0", 6658, 80)]
+        allowed, printed = self._run(unsafe, free=[])
+
+        self.assertFalse(allowed)
+        self.assertIn("No free GPU is available", printed)
+
+    def test_skipped_entirely_for_non_ollama_engines(self):
+        allowed, printed = self._run(
+            unsafe=[self._gpu("0", 9000)], free=[], engine="transformers"
+        )
+
+        self.assertTrue(allowed)
+        self.assertEqual(printed, "")
+
+    def test_no_daemon_found_is_not_treated_as_a_failure(self):
+        allowed, _ = self._run(unsafe=[], free=[], pids=())
+        self.assertTrue(allowed)
+
+    def test_unreadable_daemon_environ_reports_unverified_and_proceeds(self):
+        output = io.StringIO()
+        with mock.patch.object(cli, "config", _config_with_engine("ollama")), \
+                mock.patch(
+                    "engines.ollama_engine.find_daemon_pids", return_value=[4321]
+                ), \
+                mock.patch.object(
+                    cli.gpu_manager, "unsafe_gpus_for_process", return_value=None
+                ), \
+                redirect_stdout(output):
+            allowed = cli._check_external_runtime_gpus()
+
+        self.assertTrue(allowed)
+        self.assertIn("GPU exposure unverified", output.getvalue())
+
+
+class GPUAvailabilityReportTests(unittest.TestCase):
+    def test_reports_counts_and_labels_each_gpu(self):
+        def gpu(index, used, util):
+            return GPUInfo(
+                index=index, name="RTX A4000", memory_total_mib=16384,
+                memory_used_mib=used, memory_free_mib=16384 - used,
+                temperature_c=50, utilization_percent=util,
+                driver_version="470.86",
+            )
+
+        availability = cli.GPUAvailability(
+            in_use=[gpu("0", 6658, 80)], free=[gpu("2", 3, 0), gpu("3", 3, 0)]
+        )
+        output = io.StringIO()
+        with mock.patch.object(
+            cli.gpu_manager, "availability", return_value=availability
+        ), redirect_stdout(output):
+            cli._print_gpu_availability()
+
+        printed = output.getvalue()
+        self.assertIn("1 of 3 GPU(s) in use by other processes, 2 free", printed)
+        self.assertIn("GPU 0", printed)
+        self.assertIn("IN USE", printed)
+        self.assertIn("GPU 2 ('RTX A4000'): free", printed)
 
 
 if __name__ == "__main__":
