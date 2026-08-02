@@ -81,6 +81,17 @@ class InferenceEngine(ABC):
     # what to do about it, keeping lifecycle policy in the service layer.
     supports_runtime_lifecycle = False
 
+    def runtime_pids(self) -> List[int]:
+        """PIDs that may hold GPU memory on this engine's behalf.
+
+        Lets GPU checks tell our own model's VRAM apart from another
+        user's job, so the backend never refuses to start because of the
+        model it is itself serving. Empty means "no separate runtime
+        process to attribute" - in-process engines hold memory under the
+        backend's own PID.
+        """
+        return []
+
     @abstractmethod
     def load_model(self, model_id: Optional[str] = None) -> None:
         """Loads model_id, or the configured default when None."""

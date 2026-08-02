@@ -19,10 +19,14 @@ from services.lifecycle import (
 class FakeEngine:
     supports_runtime_lifecycle = True
 
-    def __init__(self, model_id="fake-model"):
+    def __init__(self, model_id="fake-model", runtime_pids=()):
         self.loaded = False
         self.calls = []
         self.model_id = model_id
+        self._runtime_pids = list(runtime_pids)
+
+    def runtime_pids(self):
+        return self._runtime_pids
 
     def load_model(self, model_id=None):
         self.loaded = True
@@ -73,8 +77,11 @@ class FakeGPUInfo:
 class FakeGPUManager:
     def __init__(self, busy=None):
         self._busy = busy or []
+        self.own_pids_seen = None
 
-    def busy_gpus(self):
+    def busy_gpus(self, own_pids=None, **kwargs):
+        # Recorded so a test can assert our own runtime is excluded.
+        self.own_pids_seen = own_pids
         return self._busy
 
 

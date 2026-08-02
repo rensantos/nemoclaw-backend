@@ -459,7 +459,7 @@ def _print_busy_gpu_warning() -> None:
     """Warn if any configured backend.gpu index already shows significant
     memory usage - can't be this backend's own model if it isn't running,
     so it's evidence of another process on this shared box."""
-    busy = gpu_manager.busy_gpus()
+    busy = gpu_manager.busy_gpus(own_pids=_own_gpu_pids())
     if not busy:
         typer.echo("Other GPU usage: none detected on configured GPU(s)")
         return
@@ -534,16 +534,37 @@ def main(ctx: typer.Context):
         typer.echo(ctx.get_help())
 
 
+def _own_gpu_pids():
+    """PIDs whose GPU memory is ours and therefore reclaimable.
+
+    Without this, our own resident model reads as "another process is
+    using this GPU" and the backend warns about - or refuses to start
+    because of - the very model it is serving.
+    """
+    if config.backend.engine != "ollama":
+        return []
+
+    from engines.ollama_engine import find_runtime_pids
+
+    return find_runtime_pids()
+
+
 def _print_gpu_availability() -> None:
     """Box-wide census of who is using what, checked dynamically across
     every detected GPU - no assumption about which indexes are usually
     busy on this shared machine."""
-    availability = gpu_manager.availability()
+    availability = gpu_manager.availability(own_pids=_own_gpu_pids())
     typer.echo("GPU availability: {}".format(availability.summary_line()))
     for gpu in availability.in_use:
         typer.echo(
-            "  GPU {} ('{}'): IN USE - {}, {}".format(
+            "  GPU {} ('{}'): IN USE by another process - {}, {}".format(
                 gpu.index, gpu.name, _vram_usage(gpu), _percent(gpu.utilization_percent)
+            )
+        )
+    for gpu in availability.ours:
+        typer.echo(
+            "  GPU {} ('{}'): our own model (reclaimable) - {}".format(
+                gpu.index, gpu.name, _vram_usage(gpu)
             )
         )
     for gpu in availability.free:
@@ -582,8 +603,9 @@ def _check_external_runtime_gpus(force: bool = False) -> bool:
         # Remote daemon, not running, or no pgrep: nothing inspectable.
         return True
 
+    own_pids = _own_gpu_pids()
     for pid in pids:
-        unsafe = gpu_manager.unsafe_gpus_for_process(pid)
+        unsafe = gpu_manager.unsafe_gpus_for_process(pid, own_pids=own_pids)
         if unsafe is None:
             typer.echo(
                 "Ollama daemon (PID {}): cannot read its CUDA_VISIBLE_DEVICES; "
@@ -608,7 +630,9 @@ def _check_external_runtime_gpus(force: bool = False) -> bool:
             "models itself.".format(config.backend.gpu)
         )
 
-        free = gpu_manager.availability().free
+        # "usable" not "free": a GPU holding only our own model is one we
+        # can reclaim, so it counts as somewhere safe to place the model.
+        free = gpu_manager.availability(own_pids=own_pids).usable
         if free:
             typer.echo(
                 "  Free GPU(s) remain ({}), and Ollama schedules by free "
@@ -659,7 +683,7 @@ def _check_gpu_before_start(force: bool = False) -> bool:
     if not _check_external_runtime_gpus(force=force):
         return False
 
-    busy = gpu_manager.busy_gpus()
+    busy = gpu_manager.busy_gpus(own_pids=_own_gpu_pids())
     if not busy:
         return True
 
@@ -674,7 +698,7 @@ def _check_gpu_before_start(force: bool = False) -> bool:
         )
         return True
 
-    alternatives = gpu_manager.idle_alternative_gpus()
+    alternatives = gpu_manager.idle_alternative_gpus(own_pids=_own_gpu_pids())
     if alternatives:
         typer.echo("Idle GPU(s) available instead:")
         for gpu in alternatives:

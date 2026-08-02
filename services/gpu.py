@@ -1,5 +1,5 @@
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 
@@ -16,25 +16,52 @@ class GPUInfo:
 
 
 @dataclass
+class GPUProcess:
+    """A compute process holding memory on a GPU, as attributed by
+    nvidia-smi --query-compute-apps."""
+
+    gpu_index: str
+    pid: int
+    process_name: str
+    memory_mib: Optional[int]
+
+
+@dataclass
 class GPUAvailability:
-    """Box-wide GPU census: which cards are in use by anyone, which are
-    free. Deliberately says nothing about backend.gpu - this is "what is
-    the state of this shared machine", not "is my configured GPU ok".
+    """Box-wide GPU census. Deliberately says nothing about backend.gpu -
+    this is "what is the state of this shared machine", not "is my
+    configured GPU ok".
+
+    ``ours`` is the important distinction: a GPU held by our own model
+    runtime is *reclaimable* - we can evict and reload it. Lumping it in
+    with another user's job would make the backend refuse to restart
+    because of its own model.
     """
 
     in_use: List["GPUInfo"]
     free: List["GPUInfo"]
+    ours: List["GPUInfo"] = field(default_factory=list)
 
     @property
     def total(self) -> int:
-        return len(self.in_use) + len(self.free)
+        return len(self.in_use) + len(self.free) + len(self.ours)
 
     def summary_line(self) -> str:
         if self.total == 0:
             return "No GPUs detected"
-        return "{} of {} GPU(s) in use by other processes, {} free".format(
-            len(self.in_use), self.total, len(self.free)
-        )
+        parts = ["{} of {} GPU(s) in use by other processes".format(
+            len(self.in_use), self.total
+        )]
+        if self.ours:
+            parts.append("{} held by our own model (reclaimable)".format(len(self.ours)))
+        parts.append("{} free".format(len(self.free)))
+        return ", ".join(parts)
+
+    @property
+    def usable(self) -> List["GPUInfo"]:
+        """GPUs we may place a model on: genuinely free, plus those only
+        our own runtime is holding."""
+        return self.free + self.ours
 
 
 @dataclass
@@ -101,45 +128,118 @@ class GPUManager:
             return True
         return False
 
+    def gpu_processes(self) -> List[GPUProcess]:
+        """Per-process GPU memory attribution from nvidia-smi.
+
+        --query-compute-apps reports gpu_uuid rather than index, so this
+        maps uuid -> index itself. Returns an empty list when nvidia-smi
+        is missing or reports nothing attributable; callers must treat
+        that as "unknown", not "nobody is using the GPU".
+        """
+        rows = self._nvidia_smi(
+            "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+            expected_fields=4,
+        )
+        if not rows:
+            return []
+
+        index_by_uuid = {
+            parts[1]: parts[0]
+            for parts in self._nvidia_smi("--query-gpu=index,uuid", expected_fields=2)
+        }
+
+        processes = []
+        for parts in rows:
+            pid = self._int_or_none(parts[1])
+            if pid is None:
+                continue
+            processes.append(
+                GPUProcess(
+                    gpu_index=index_by_uuid.get(parts[0], parts[0]),
+                    pid=pid,
+                    process_name=parts[2],
+                    memory_mib=self._int_or_none(parts[3]),
+                )
+            )
+        return processes
+
+    def gpu_owner(
+        self,
+        gpu: GPUInfo,
+        own_pids=None,
+        processes: Optional[List[GPUProcess]] = None,
+        threshold_mib: int = 500,
+        utilization_threshold_percent: int = 10,
+    ) -> str:
+        """Classify a GPU as "free", "ours", or "others".
+
+        "ours" means every attributable compute process on the card
+        belongs to our own model runtime, so we may reclaim it - the model
+        can be evicted and reloaded. Without this the backend would refuse
+        to restart because of the model it is itself serving.
+
+        Falls back to the memory/utilization heuristic when nvidia-smi
+        attributes no process to a busy GPU: usage we cannot attribute is
+        treated as somebody else's, never as ours.
+        """
+        own_pids = set(own_pids or ())
+        if processes is None:
+            processes = self.gpu_processes()
+
+        on_this_gpu = [p for p in processes if str(p.gpu_index) == str(gpu.index)]
+        if on_this_gpu:
+            if all(p.pid in own_pids for p in on_this_gpu):
+                return "ours"
+            return "others"
+
+        if self.gpu_is_in_use(gpu, threshold_mib, utilization_threshold_percent):
+            return "others"
+        return "free"
+
     def availability(
         self,
         threshold_mib: int = 500,
         utilization_threshold_percent: int = 10,
+        own_pids=None,
     ) -> GPUAvailability:
-        """Census of every GPU on the box, split into in-use and free.
+        """Census of every GPU on the box: in use by others, held by our
+        own runtime (reclaimable), or free.
 
         Checks all detected GPUs dynamically - it never assumes which
         indexes are "the busy ones" on this shared machine.
         """
-        in_use, free = [], []
+        processes = self.gpu_processes()
+        in_use, free, ours = [], [], []
         for gpu in self.detect_gpus():
-            target = in_use if self.gpu_is_in_use(
-                gpu, threshold_mib, utilization_threshold_percent
-            ) else free
-            target.append(gpu)
-        return GPUAvailability(in_use=in_use, free=free)
+            owner = self.gpu_owner(
+                gpu, own_pids, processes, threshold_mib, utilization_threshold_percent
+            )
+            {"others": in_use, "ours": ours, "free": free}[owner].append(gpu)
+        return GPUAvailability(in_use=in_use, free=free, ours=ours)
 
     def busy_gpus(
         self,
         threshold_mib: int = 500,
         utilization_threshold_percent: int = 10,
+        own_pids=None,
     ) -> List[GPUInfo]:
-        """Configured backend.gpu index(es) already showing usage by
-        another process. Intended to be checked before this process has
-        loaded a model itself, so any usage found belongs to someone else
-        - there is no per-process attribution here (nvidia-smi's basic
-        query doesn't provide it), just "is this GPU already not idle".
-        backend.gpu may be a comma-separated multi-GPU value (e.g. "2,3");
-        each index is checked independently.
+        """Configured backend.gpu index(es) in use by *another* process.
+
+        GPUs held only by our own runtime (own_pids) are excluded: that
+        memory is reclaimable, and reporting it would mean warning about
+        the model this backend is itself serving. backend.gpu may be a
+        comma-separated multi-GPU value (e.g. "2,3"); each index is
+        checked independently.
         """
         gpus = self.detect_gpus()
+        processes = self.gpu_processes()
         indexes = [part.strip() for part in str(self.config.backend.gpu).split(",")]
         busy = []
         for index in indexes:
             gpu = self._gpu_by_index(gpus, index)
-            if gpu and self.gpu_is_in_use(
-                gpu, threshold_mib, utilization_threshold_percent
-            ):
+            if gpu and self.gpu_owner(
+                gpu, own_pids, processes, threshold_mib, utilization_threshold_percent
+            ) == "others":
                 busy.append(gpu)
         return busy
 
@@ -147,20 +247,22 @@ class GPUManager:
         self,
         threshold_mib: int = 500,
         utilization_threshold_percent: int = 10,
+        own_pids=None,
     ) -> List[GPUInfo]:
         """GPUs on this box NOT among backend.gpu's configured index(es)
-        that are themselves idle - genuine alternatives a human could
-        reconfigure backend.gpu to use instead of a busy configured GPU.
-        Pairs with busy_gpus() to decide whether "no other way" applies.
+        that we could use instead - free, or held only by our own runtime
+        and therefore reclaimable. Pairs with busy_gpus() to decide
+        whether "no other way" applies.
         """
         configured = {part.strip() for part in str(self.config.backend.gpu).split(",")}
+        processes = self.gpu_processes()
         return [
             gpu
             for gpu in self.detect_gpus()
             if str(gpu.index) not in configured
-            and not self.gpu_is_in_use(
-                gpu, threshold_mib, utilization_threshold_percent
-            )
+            and self.gpu_owner(
+                gpu, own_pids, processes, threshold_mib, utilization_threshold_percent
+            ) != "others"
         ]
 
     def visible_gpu_indexes_for_process(self, pid) -> Optional[List[str]]:
@@ -194,6 +296,7 @@ class GPUManager:
         pid,
         threshold_mib: int = 500,
         utilization_threshold_percent: int = 10,
+        own_pids=None,
     ) -> Optional[List[GPUInfo]]:
         """GPUs that `pid` can reach AND that someone else is already
         using - i.e. cards this process could disrupt if its scheduler
@@ -208,11 +311,14 @@ class GPUManager:
         if visible is None:
             return None
         visible_set = set(visible)
+        processes = self.gpu_processes()
         return [
             gpu
             for gpu in self.detect_gpus()
             if str(gpu.index) in visible_set
-            and self.gpu_is_in_use(gpu, threshold_mib, utilization_threshold_percent)
+            and self.gpu_owner(
+                gpu, own_pids, processes, threshold_mib, utilization_threshold_percent
+            ) == "others"
         ]
 
     def driver_version(self) -> str:
@@ -221,20 +327,12 @@ class GPUManager:
             return "unavailable"
         return gpus[0].driver_version
 
-    def _detect_with_nvidia_smi(self) -> List[GPUInfo]:
-        query = (
-            "index,name,memory.total,memory.used,memory.free,"
-            "temperature.gpu,utilization.gpu,driver_version"
-        )
-        command = [
-            "nvidia-smi",
-            "--query-gpu={}".format(query),
-            "--format=csv,noheader,nounits",
-        ]
-
+    def _nvidia_smi(self, query: str, expected_fields: int) -> List[List[str]]:
+        """Runs an nvidia-smi CSV query, returning parsed rows. An
+        unavailable nvidia-smi yields no rows rather than raising."""
         try:
             result = subprocess.run(
-                command,
+                ["nvidia-smi", query, "--format=csv,noheader,nounits"],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -243,11 +341,21 @@ class GPUManager:
         except (OSError, subprocess.CalledProcessError):
             return []
 
-        gpus = []
+        rows = []
         for line in result.stdout.splitlines():
             parts = [part.strip() for part in line.split(",")]
-            if len(parts) < 8:
-                continue
+            if len(parts) >= expected_fields:
+                rows.append(parts)
+        return rows
+
+    def _detect_with_nvidia_smi(self) -> List[GPUInfo]:
+        query = (
+            "index,name,memory.total,memory.used,memory.free,"
+            "temperature.gpu,utilization.gpu,driver_version"
+        )
+
+        gpus = []
+        for parts in self._nvidia_smi("--query-gpu={}".format(query), expected_fields=8):
             gpus.append(
                 GPUInfo(
                     index=parts[0],

@@ -742,6 +742,45 @@ off both daemon PIDs, and the warn/refuse/`--force` paths were exercised
 against a simulated busy GPU 0/1 (the exact situation observed earlier
 that day).
 
+Own-usage attribution (2026-08-03): the busy-GPU checks had **no
+per-process attribution at all** - the original design leaned on "the
+check runs before this backend has loaded anything, so any usage must be
+someone else's". That assumption is false under `engine: ollama`, where
+the daemon outlives the backend and keeps a model resident for
+`OLLAMA_KEEP_ALIVE` (5 min default). Our own model therefore read as
+another user's job, and the backend would warn about - or refuse to start
+because of - **the very model it was serving**. Verified live: with
+`qwen3:30b` resident, `busy_gpus()` returned `['2','3']` and
+`_check_gpu_before_start()` refused.
+
+- `GPUManager.gpu_processes()` uses `nvidia-smi --query-compute-apps`
+  (works on UBI's 470.86) for real per-PID attribution. That query reports
+  `gpu_uuid`, not index, so it maps uuid -> index via a second query.
+- `GPUManager.gpu_owner()` classifies each card `free` / `ours` /
+  `others`. `ours` requires **every** attributable process on the card to
+  be ours - a shared card is never claimed. Usage nvidia-smi cannot
+  attribute falls back to the memory/utilization heuristic and counts as
+  `others`: unexplained memory is never assumed to be ours.
+- `GPUAvailability` gained an `ours` bucket and a `usable` property
+  (`free + ours`). `busy_gpus()`, `idle_alternative_gpus()`,
+  `availability()` and `unsafe_gpus_for_process()` all take `own_pids`.
+- **The VRAM belongs to a child process.** `ollama serve` does not hold
+  the model; it spawns an `ollama runner` per loaded model and nvidia-smi
+  attributes the memory to that child (confirmed live: serve was 23825,
+  the 4x~6GB belonged to runner 17181). New
+  `engines.ollama_engine.find_runtime_pids()` walks `/proc` to include
+  descendants - matching only the daemon PID would have left the bug in
+  place.
+- New `InferenceEngine.runtime_pids()` (default `[]`) lets the service
+  layer ask the engine which PIDs are its own without knowing anything
+  Ollama-specific. `InferenceService._warn_if_gpu_busy()` and the CLI
+  checks both pass it through.
+
+Live-verified on UBI in both directions: with our own model resident on
+all four GPUs the census read "4 held by our own model (reclaimable)" and
+`./backend start` proceeded; with GPU 0/1 simulated as another user's and
+GPU 2/3 holding our model, only 0/1 were flagged.
+
 **Operator decisions taken 2026-08-02, deliberately leaving two things
 as they are:**
 

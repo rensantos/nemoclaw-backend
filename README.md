@@ -292,17 +292,33 @@ about to use (see `docs/problems.md`). There's no per-process attribution
 availability** census of every card on the box:
 
 ```text
-GPU availability: 2 of 4 GPU(s) in use by other processes, 2 free
-  GPU 0 ('RTX A4000'): IN USE - 6658 MiB / 16117 MiB, 80%
-  GPU 1 ('RTX A4000'): IN USE - 6658 MiB / 16117 MiB, 87%
-  GPU 2 ('RTX A4000'): free - 3 MiB / 16117 MiB
-  GPU 3 ('RTX A4000'): free - 3 MiB / 16117 MiB
+GPU availability: 2 of 4 GPU(s) in use by other processes, 2 held by our own model (reclaimable), 0 free
+  GPU 0 ('RTX A4000'): IN USE by another process - 6658 MiB / 16117 MiB, 80%
+  GPU 1 ('RTX A4000'): IN USE by another process - 6658 MiB / 16117 MiB, 87%
+  GPU 2 ('RTX A4000'): our own model (reclaimable) - 5642 MiB / 16117 MiB
+  GPU 3 ('RTX A4000'): our own model (reclaimable) - 5732 MiB / 16117 MiB
 ```
 
-A GPU counts as in use if **either** its memory (>500 MiB) or its
-utilization (>10%) is above threshold - memory alone misses a
-compute-heavy job with a small resident footprint. Which indexes are busy
-is always determined live; nothing assumes a fixed "safe" pair.
+Each card is classified from real per-process attribution
+(`nvidia-smi --query-compute-apps`):
+
+- **our own model (reclaimable)** - every process holding the card is our
+  model runtime. We can evict and reload it, so this never blocks a start.
+  Without this distinction the backend would refuse to start because of
+  the model it is itself serving: the Ollama daemon keeps a model resident
+  for `OLLAMA_KEEP_ALIVE` (5 min by default) and outlives the backend.
+- **IN USE by another process** - someone else's work, or memory that
+  cannot be attributed to us. Unexplained usage is never claimed as ours.
+- **free** - nothing on it.
+
+A card with a mix of our processes and someone else's counts as theirs.
+Where the memory is *only* ours, `./backend start` treats it as usable.
+
+Falling back on the memory/utilization heuristic, a GPU counts as in use
+if **either** its memory (>500 MiB) or its utilization (>10%) is above
+threshold - memory alone misses a compute-heavy job with a small resident
+footprint. Which indexes are busy is always determined live; nothing
+assumes a fixed "safe" pair.
 
 `backend gpu monitor` refreshes utilization, VRAM usage, and temperature until
 Ctrl+C.

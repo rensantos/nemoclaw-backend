@@ -18,6 +18,7 @@ daemon owns the CUDA context; model_id is mutable from that point on.
 
 import json
 import logging
+import os
 import subprocess
 import time
 import urllib.error
@@ -73,6 +74,51 @@ def find_daemon_pids() -> List[int]:
     return pids
 
 
+def find_runtime_pids() -> List[int]:
+    """Every PID that may hold GPU memory on our behalf: the `ollama
+    serve` daemon plus its descendants.
+
+    The daemon does not hold the model itself - it spawns an `ollama
+    runner` child per loaded model, and nvidia-smi attributes the VRAM to
+    that child. Matching only the daemon PID would classify our own model
+    as another user's job (confirmed live: serve was 23825 while the
+    memory belonged to runner 17181).
+    """
+    daemons = find_daemon_pids()
+    if not daemons:
+        return []
+
+    children_by_parent = _children_by_parent()
+    pids, queue = set(daemons), list(daemons)
+    while queue:
+        for child in children_by_parent.get(queue.pop(), ()):
+            if child not in pids:
+                pids.add(child)
+                queue.append(child)
+    return sorted(pids)
+
+
+def _children_by_parent():
+    """Maps parent PID -> child PIDs by reading /proc/<pid>/stat."""
+    children = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return children
+
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/{}/stat".format(entry), "r") as stat_file:
+                fields = stat_file.read().rsplit(")", 1)[-1].split()
+            parent = int(fields[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        children.setdefault(parent, []).append(int(entry))
+    return children
+
+
 def _is_ollama_executable(pid: int) -> bool:
     """Whether pid is the ollama binary itself, not a shell that merely
     mentions it. `pgrep -f "ollama serve"` also matches the `bash -c ...`
@@ -101,6 +147,11 @@ class OllamaEngine(InferenceEngine):
         self.model_id = config.model.id
         self.base_url = config.backend.ollama_host.rstrip("/")
         self.gpu_manager = GPUManager(config)
+
+    def runtime_pids(self) -> List[int]:
+        """The daemon and its model-runner children (see
+        find_runtime_pids); their VRAM is ours and reclaimable."""
+        return find_runtime_pids()
 
     def load_model(self, model_id: Optional[str] = None) -> None:
         """Validates the target tag is present locally. Never pulls."""

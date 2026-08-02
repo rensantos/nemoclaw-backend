@@ -59,7 +59,11 @@ class InferenceService:
         """
         if self.gpu_manager is None:
             return
-        for gpu in self.gpu_manager.busy_gpus():
+        # Exclude our own model runtime: on a restart the previous model
+        # may still be resident, and warning about it would be warning
+        # about ourselves.
+        own_pids = self.engine.runtime_pids()
+        for gpu in self.gpu_manager.busy_gpus(own_pids=own_pids):
             _logger.warning(
                 "GPU %s ('%s') already has %sMiB/%sMiB used before this "
                 "backend has loaded a model - likely another process's "

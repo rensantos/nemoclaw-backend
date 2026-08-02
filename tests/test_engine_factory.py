@@ -532,3 +532,35 @@ class OllamaDaemonDiscoveryTests(unittest.TestCase):
             "engines.ollama_engine.subprocess.run", side_effect=OSError
         ):
             self.assertEqual(find_daemon_pids(), [])
+
+    def test_runtime_pids_include_the_model_runner_child(self):
+        """nvidia-smi attributes VRAM to the `ollama runner` child, not to
+        `ollama serve`, so ownership checks need the whole tree."""
+        from engines import ollama_engine
+
+        with mock.patch.object(
+            ollama_engine, "find_daemon_pids", return_value=[23825]
+        ), mock.patch.object(
+            ollama_engine,
+            "_children_by_parent",
+            return_value={23825: [17181], 17181: [17999]},
+        ):
+            self.assertEqual(
+                ollama_engine.find_runtime_pids(), [17181, 17999, 23825]
+            )
+
+    def test_runtime_pids_empty_when_no_daemon(self):
+        from engines import ollama_engine
+
+        with mock.patch.object(ollama_engine, "find_daemon_pids", return_value=[]):
+            self.assertEqual(ollama_engine.find_runtime_pids(), [])
+
+    def test_engine_exposes_runtime_pids(self):
+        from engines.ollama_engine import OllamaEngine
+        from engines import ollama_engine
+
+        engine = OllamaEngine(_make_config("ollama"))
+        with mock.patch.object(
+            ollama_engine, "find_runtime_pids", return_value=[1, 2]
+        ):
+            self.assertEqual(engine.runtime_pids(), [1, 2])
