@@ -179,17 +179,32 @@ config` prints the active configuration after YAML and environment overrides.
 continuously.
 
 `Lifecycle` reports the runtime state owned by `InferenceService`: `ready`,
-`loading`, `unloading`, `switching`, `unloaded`, or `degraded`. Today
-`InferenceService` always reports `ready` after startup; load/unload/switch
-transitions are a future increment. See
-`docs/model-lifecycle-design.md`.
+`loading`, `unloading`, `switching`, `unloaded`, or `degraded`. `status` also
+prints the runtime `Loaded model` when it differs from the configured
+`model.id`, and the `Target model` during a transition.
 
 `backend model load`, `backend model unload`, and `backend model switch` call
-management endpoints under `/admin/model/` on the running backend. They are
-not implemented yet: the backend replies `501 Not Implemented` and the CLI
-prints that message and exits non-zero. No model is loaded, unloaded, or
-switched, and lifecycle state does not change. See
-`docs/model-lifecycle-design.md` for the full design and target behavior.
+management endpoints under `/admin/model/` on the running backend and perform
+real transitions:
+
+```bash
+./backend model switch qwen3:1.7b            # runtime only; restart reverts it
+./backend model switch qwen3:1.7b --persist  # also rewrites config.yaml
+./backend model unload --timeout 30
+./backend model load qwen3:30b --json
+```
+
+The target must be listed in `model.available` in `config/config.yaml`;
+anything else is rejected before the engine is touched. `--persist` is the
+difference between `model switch` (runtime, live, reverts on restart) and
+`model use` (config, needs a restart). `--wait` and `--poll-interval` are not
+implemented: transitions are synchronous, so there is nothing to poll.
+
+This works only for engines that can do it safely. `OllamaEngine` supports it
+because the Ollama daemon owns the CUDA context. `TransformersEngine` refuses
+with `501`: its CUDA state is owned in-process, where cleanup is best-effort
+and a swap can fragment VRAM enough to break later loads — change `model.id`
+and restart instead. See `docs/model-lifecycle-design.md`.
 
 Status uses multiple signals so it still reflects reality when the backend was
 started outside the CLI:
@@ -409,30 +424,43 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   }'
 ```
 
-## Lifecycle Management Endpoints (Stubs)
+## Lifecycle Management Endpoints
 
 `/admin/model/*` are management endpoints, separate from the OpenAI-compatible
-`/v1/*` namespace. They are not implemented yet and always reply `501 Not
-Implemented`:
+`/v1/*` namespace, and carry no API stability guarantee:
 
 ```bash
-curl -i -X POST http://127.0.0.1:8000/admin/model/load \
-  -H 'Content-Type: application/json' \
-  -d '{"model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"}'
-curl -i -X POST http://127.0.0.1:8000/admin/model/unload
 curl -i -X POST http://127.0.0.1:8000/admin/model/switch \
   -H 'Content-Type: application/json' \
-  -d '{"model_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"}'
+  -d '{"model_id": "qwen3:1.7b", "persist": false}'
+curl -i -X POST http://127.0.0.1:8000/admin/model/unload
+curl -i -X POST http://127.0.0.1:8000/admin/model/load \
+  -H 'Content-Type: application/json' \
+  -d '{"model_id": "qwen3:30b"}'
 ```
 
-Response body:
+Success body:
 
 ```json
 {
-  "error": "not_implemented",
-  "detail": "Model lifecycle operations are not implemented yet.",
-  "lifecycle_state": "ready"
+  "status": "ok",
+  "lifecycle_state": "ready",
+  "loaded_model": "qwen3:1.7b",
+  "previous_model": "qwen3:30b",
+  "elapsed_seconds": 0.42,
+  "persisted": false
 }
 ```
 
-See `docs/model-lifecycle-design.md` for the full design.
+Failures return `{"error": ..., "detail": ..., "lifecycle_state": ...}` with
+`404` (model not in `model.available`), `409` (illegal from the current state,
+e.g. loading a different model while one is ready), `501` (the active engine
+does not support runtime lifecycle), or `503` (engine unreachable, or the
+target Ollama tag is not pulled).
+
+While a transition is in progress, `/v1/chat/completions` and `/generate`
+return `503`. Requests are rejected, never queued. In-flight requests are
+drained first.
+
+See `docs/model-lifecycle-design.md` for the full design and
+`openapi/backend-node.openapi.yaml` for the authoritative contract.

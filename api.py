@@ -5,8 +5,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from config import settings
-from engines.base import EngineUnavailableError, ModelNotFoundError
+from engines.base import (
+    EngineUnavailableError,
+    LifecycleNotSupportedError,
+    ModelNotFoundError,
+    ModelUnavailableError,
+)
 from services.inference import create_inference_service
+from services.lifecycle import LifecycleConflictError, LifecycleUnavailableError
 from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
 
 
@@ -53,7 +59,7 @@ def chat_completions(req: ChatCompletionRequest):
                 }
             },
         )
-    except EngineUnavailableError as exc:
+    except (EngineUnavailableError, LifecycleUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
     return {
@@ -88,20 +94,57 @@ def generate(req: GenerateRequest):
             req.temperature,
             req.think,
         )
-    except EngineUnavailableError as exc:
+    except (EngineUnavailableError, LifecycleUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
 
-@router.post("/admin/model/load", status_code=501)
+def _lifecycle_call(operation):
+    """Runs a lifecycle operation and maps its failures to HTTP status
+    codes. /admin/* is management surface and carries no OpenAI
+    compatibility guarantee, so these use a plain error/detail body.
+    """
+    try:
+        return operation()
+    except LifecycleNotSupportedError as exc:
+        return _lifecycle_error(501, "lifecycle_not_supported", str(exc))
+    except ValueError as exc:
+        return _lifecycle_error(404, "model_not_configured", str(exc))
+    except LifecycleConflictError as exc:
+        return _lifecycle_error(409, "lifecycle_conflict", str(exc))
+    except EngineUnavailableError as exc:
+        return _lifecycle_error(503, "engine_unavailable", str(exc))
+    except ModelUnavailableError as exc:
+        # Pre-flight rejection: nothing changed, previous model still serving.
+        return _lifecycle_error(409, "model_unavailable", str(exc))
+    except RuntimeError as exc:
+        return _lifecycle_error(503, "lifecycle_failed", str(exc))
+
+
+def _lifecycle_error(status_code: int, error: str, detail: str):
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": error,
+            "detail": detail,
+            "lifecycle_state": inference_service.lifecycle_state.value,
+        },
+    )
+
+
+@router.post("/admin/model/load")
 def admin_model_load(req: ModelLifecycleRequest):
-    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())
+    return _lifecycle_call(
+        lambda: inference_service.load_model(req.model_id, req.persist)
+    )
 
 
-@router.post("/admin/model/unload", status_code=501)
+@router.post("/admin/model/unload")
 def admin_model_unload():
-    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())
+    return _lifecycle_call(inference_service.unload_model)
 
 
-@router.post("/admin/model/switch", status_code=501)
+@router.post("/admin/model/switch")
 def admin_model_switch(req: ModelLifecycleRequest):
-    return JSONResponse(status_code=501, content=inference_service.lifecycle_stub_response())
+    return _lifecycle_call(
+        lambda: inference_service.switch_model(req.model_id, req.persist)
+    )

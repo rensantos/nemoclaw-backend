@@ -93,9 +93,12 @@ class OllamaEngineReadPathTests(unittest.TestCase):
                 "engines.ollama_engine.urllib.request.urlopen",
                 side_effect=urllib.error.URLError("connection refused"),
             )
+        # A fresh response per call: each `with urlopen(...)` closes the one
+        # it got, so a single reused return_value breaks any engine method
+        # that makes more than one request (e.g. switch_model).
         return mock.patch(
             "engines.ollama_engine.urllib.request.urlopen",
-            return_value=_fake_urlopen_response(payload),
+            side_effect=lambda *args, **kwargs: _fake_urlopen_response(payload),
         )
 
     def test_constructs_without_error(self):
@@ -184,6 +187,60 @@ class OllamaEngineReadPathTests(unittest.TestCase):
             with self.assertRaises(EngineUnavailableError):
                 engine.unload_model()
 
+    def test_supports_runtime_lifecycle(self):
+        self.assertTrue(self._engine().supports_runtime_lifecycle)
+
+    def test_load_model_with_explicit_id_repoints_the_engine(self):
+        engine = self._engine(model_id="qwen3:1.7b")
+        payload = {"models": [{"name": "qwen3:1.7b"}, {"name": "qwen3:4b"}]}
+
+        with self._mock_urlopen(payload):
+            engine.load_model("qwen3:4b")
+
+        self.assertEqual(engine.model_id, "qwen3:4b")
+
+    def test_load_model_leaves_model_id_untouched_when_target_missing(self):
+        engine = self._engine(model_id="qwen3:1.7b")
+        payload = {"models": [{"name": "qwen3:1.7b"}]}
+
+        with self._mock_urlopen(payload):
+            with self.assertRaisesRegex(RuntimeError, "ollama pull llama3:8b"):
+                engine.load_model("llama3:8b")
+
+        self.assertEqual(engine.model_id, "qwen3:1.7b")
+
+    def test_switch_model_verifies_target_before_unloading_the_old_one(self):
+        engine = self._engine(model_id="qwen3:1.7b")
+        payload = {"models": [{"name": "qwen3:1.7b"}]}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            with self.assertRaisesRegex(RuntimeError, "ollama pull llama3:8b"):
+                engine.switch_model("llama3:8b")
+
+        # Only the tag check ran; the old model was never released, so it
+        # keeps serving.
+        self.assertEqual(engine.model_id, "qwen3:1.7b")
+        called_urls = [call[0][0].full_url for call in mocked_urlopen.call_args_list]
+        self.assertEqual(called_urls, ["http://127.0.0.1:11434/api/tags"])
+
+    def test_switch_model_unloads_old_then_repoints(self):
+        engine = self._engine(model_id="qwen3:1.7b")
+        payload = {"models": [{"name": "qwen3:1.7b"}, {"name": "qwen3:4b"}]}
+
+        with self._mock_urlopen(payload) as mocked_urlopen:
+            engine.switch_model("qwen3:4b")
+
+        self.assertEqual(engine.model_id, "qwen3:4b")
+        requests = mocked_urlopen.call_args_list
+        self.assertEqual(requests[0][0][0].full_url, "http://127.0.0.1:11434/api/tags")
+        unload = requests[1][0][0]
+        self.assertEqual(unload.full_url, "http://127.0.0.1:11434/api/generate")
+        # The old tag is the one evicted, not the incoming one.
+        self.assertEqual(
+            json.loads(unload.data.decode("utf-8")),
+            {"model": "qwen3:1.7b", "keep_alive": 0},
+        )
+
 
 def _message(role, content):
     return types.SimpleNamespace(role=role, content=content)
@@ -206,9 +263,12 @@ class OllamaEngineChatTests(unittest.TestCase):
                 "engines.ollama_engine.urllib.request.urlopen",
                 side_effect=urllib.error.URLError("connection refused"),
             )
+        # A fresh response per call: each `with urlopen(...)` closes the one
+        # it got, so a single reused return_value breaks any engine method
+        # that makes more than one request (e.g. switch_model).
         return mock.patch(
             "engines.ollama_engine.urllib.request.urlopen",
-            return_value=_fake_urlopen_response(payload),
+            side_effect=lambda *args, **kwargs: _fake_urlopen_response(payload),
         )
 
     def test_chat_returns_content_and_token_usage(self):
@@ -379,9 +439,12 @@ class OllamaEngineInferenceServiceIntegrationTests(unittest.TestCase):
                 "engines.ollama_engine.urllib.request.urlopen",
                 side_effect=urllib.error.URLError("connection refused"),
             )
+        # A fresh response per call: each `with urlopen(...)` closes the one
+        # it got, so a single reused return_value breaks any engine method
+        # that makes more than one request (e.g. switch_model).
         return mock.patch(
             "engines.ollama_engine.urllib.request.urlopen",
-            return_value=_fake_urlopen_response(payload),
+            side_effect=lambda *args, **kwargs: _fake_urlopen_response(payload),
         )
 
     def test_inference_service_constructs_when_tag_present_at_startup(self):

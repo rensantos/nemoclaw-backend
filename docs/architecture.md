@@ -334,30 +334,35 @@ sequentially. First-token latency remains unavailable until streaming exists.
 ## Model Lifecycle (Phase 5)
 
 `services/lifecycle.py` defines `LifecycleState`
-(`unloaded`/`loading`/`ready`/`unloading`/`switching`/`degraded`) and
-`lifecycle_not_implemented_response()`, the fixed stub body used by the
-`/admin/model/*` endpoints. The full state machine and design rationale
-live in `docs/model-lifecycle-design.md`.
+(`unloaded`/`loading`/`ready`/`unloading`/`switching`/`degraded`), the
+`LEGAL_TRANSITIONS` table and its `validate_transition()` guard, and the
+`LifecycleUnavailableError`/`LifecycleConflictError` exceptions. The full
+state machine and design rationale live in
+`docs/model-lifecycle-design.md`.
 
-Increment 1 adds state reporting only: `InferenceService` owns
-`lifecycle_state`, currently always `ready` after the existing startup
-load, and exposes it through `/health` alongside `status`, `model`,
-`cuda`, and `gpu`. `./backend status` prints `Lifecycle: <state>`. No
-transitions, worker supervision, or CUDA changes exist yet.
+Increment 1 added state reporting only. Increment 2 added the
+`/admin/model/*` endpoint surface as `501` stubs. Both are superseded by
+Increment 3, which implements the transitions for real.
 
-Increment 2 adds the command/endpoint surface without behavior:
 `POST /admin/model/load`, `POST /admin/model/unload`, and
-`POST /admin/model/switch` live under `/admin/`, separate from `/v1/*`,
-so they carry no OpenAI-compatible stability guarantee. For a
-well-formed request, each returns HTTP `501` with a fixed JSON body
-built from `lifecycle_not_implemented_response()` and never touches
-`lifecycle_state`, the engine, or CUDA. `load` and `switch` bind a
-required `ModelLifecycleRequest` body (`model_id: str`); a missing or
-malformed body fails FastAPI request validation before the handler
-runs and returns the standard `422` instead of the `501` stub.
-`unload` takes no body and always returns `501`. `./backend model
-load|unload|switch` call these endpoints, print the `detail` message,
-and exit non-zero.
+`POST /admin/model/switch` live under `/admin/`, separate from `/v1/*`, so
+they carry no OpenAI-compatible stability guarantee. `InferenceService`
+owns the state machine: it validates the target through `ModelManager`
+against `config.yaml`'s `model.available` catalog before touching the
+engine, drains in-flight requests, delegates the runtime work to the
+engine, and rejects inference with `503` while not `ready`. `/health`
+reports `lifecycle_state`, `loaded_model`, and `target_model`.
 
-Real load/unload/switch behavior, worker supervision, and CUDA cleanup
-are Increment 3+ work per `docs/model-lifecycle-design.md`.
+Whether a transition is possible at all is an engine property.
+`InferenceEngine.supports_runtime_lifecycle` (default `False`) declares
+it; `InferenceService` enforces it. `OllamaEngine` sets it `True` — the
+daemon owns the CUDA context, so the backend process carries none of the
+allocator risk. `TransformersEngine` leaves it `False` and every lifecycle
+call returns `501`, because in-process CUDA cleanup is best-effort and a
+swap can break later loads. This is the engine/service split applied to
+lifecycle: the engine says what it can do, the service decides what
+happens.
+
+Worker supervision, CUDA cleanup by process termination, and side-by-side
+switching remain future work per `docs/model-lifecycle-design.md`; they
+are what would let `TransformersEngine` support lifecycle too.

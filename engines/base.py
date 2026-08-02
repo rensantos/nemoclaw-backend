@@ -36,16 +36,68 @@ class ModelNotFoundError(Exception):
         )
 
 
+class ModelUnavailableError(RuntimeError):
+    """Raised by an engine's pre-flight check when a lifecycle target
+    cannot be used and **nothing has been changed yet**.
+
+    The distinction matters: a pre-flight failure means the previously
+    loaded model is still intact and serving, so the service restores the
+    prior lifecycle state instead of reporting ``degraded``. Failures
+    raised after the engine has begun releasing or swapping state are
+    ordinary exceptions and do lead to ``degraded``.
+    """
+
+
+class LifecycleNotSupportedError(Exception):
+    """Raised when a runtime lifecycle operation is requested against an
+    engine that cannot perform it safely.
+
+    TransformersEngine owns its own Python/CUDA state in-process, where
+    ``del model`` + ``empty_cache()`` is best-effort only and can leave
+    allocator fragmentation behind (docs/model-lifecycle-design.md,
+    "CUDA Cleanup"). Refusing is the honest answer until worker
+    supervision exists; the alternative would be a swap that appears to
+    succeed and silently poisons later loads.
+    """
+
+    def __init__(self, engine_name: str):
+        self.engine_name = engine_name
+        super().__init__(
+            "Runtime model lifecycle is not supported by {}. Its CUDA state "
+            "is owned in-process, where cleanup is best-effort only; a "
+            "supervised worker process is required for a reliable "
+            "load/unload/switch boundary (see "
+            "docs/model-lifecycle-design.md). Change model.id in "
+            "config/config.yaml and restart the backend "
+            "instead.".format(engine_name)
+        )
+
+
 class InferenceEngine(ABC):
     """Minimal interface required by the Nemoclaw Backend API."""
 
+    # Whether load/unload/switch can be performed safely against a running
+    # process. The engine declares the capability; InferenceService decides
+    # what to do about it, keeping lifecycle policy in the service layer.
+    supports_runtime_lifecycle = False
+
     @abstractmethod
-    def load_model(self) -> None:
-        pass
+    def load_model(self, model_id: Optional[str] = None) -> None:
+        """Loads model_id, or the configured default when None."""
 
     @abstractmethod
     def unload_model(self) -> None:
         pass
+
+    def switch_model(self, model_id: str) -> None:
+        """Transitions from the currently loaded model to model_id.
+
+        Default is unload-then-load; engines that can verify the target
+        before giving up the current model should override this so a bad
+        target leaves the old model serving.
+        """
+        self.unload_model()
+        self.load_model(model_id)
 
     @abstractmethod
     def health(self):

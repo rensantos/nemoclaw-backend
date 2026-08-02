@@ -50,6 +50,10 @@ class BackendState:
     port_open: bool
     matching_processes: List[str]
     lifecycle_state: str = "unknown"
+    # Runtime model reported by /health, which can differ from config.yaml's
+    # model.id after a non-persisted './backend model switch'.
+    loaded_model: Optional[str] = None
+    target_model: Optional[str] = None
 
     @property
     def running(self) -> bool:
@@ -73,7 +77,7 @@ def _admin_url(path: str) -> str:
     return "http://{}:{}{}".format(config.backend.host, config.backend.port, path)
 
 
-def _post_json(url: str, payload: Optional[dict] = None):
+def _post_json(url: str, payload: Optional[dict] = None, timeout: int = 5):
     """POST JSON to url. Returns (status_code, body_text); status_code is
     None when the backend is unreachable."""
     data = json.dumps(payload or {}).encode("utf-8")
@@ -84,7 +88,7 @@ def _post_json(url: str, payload: Optional[dict] = None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8")
@@ -92,18 +96,40 @@ def _post_json(url: str, payload: Optional[dict] = None):
         return None, "unavailable ({})".format(exc)
 
 
-def _echo_lifecycle_stub_result(status_code: Optional[int], body: str) -> None:
+def _echo_lifecycle_result(
+    status_code: Optional[int], body: str, requested_model: Optional[str], as_json: bool
+) -> None:
+    """Prints a lifecycle result and exits non-zero on failure."""
     if status_code is None:
-        typer.echo("Backend is not reachable: {}".format(body))
-        return
+        if as_json:
+            typer.echo(json.dumps({"error": "unreachable", "detail": body}))
+        else:
+            typer.echo("Backend is not reachable: {}".format(body))
+        raise typer.Exit(code=1)
 
     try:
         data = json.loads(body)
-        detail = data.get("detail", "Model lifecycle operations are not implemented yet.")
     except ValueError:
-        detail = "Model lifecycle operations are not implemented yet."
+        typer.echo("Unexpected response from backend: {}".format(body))
+        raise typer.Exit(code=1)
 
-    typer.echo(detail)
+    if as_json:
+        typer.echo(json.dumps(data))
+        raise typer.Exit(code=0 if status_code == 200 else 1)
+
+    if status_code != 200:
+        typer.echo("Failed: {}".format(data.get("detail", body)))
+        typer.echo("Lifecycle: {}".format(data.get("lifecycle_state", "unknown")))
+        raise typer.Exit(code=1)
+
+    if requested_model:
+        typer.echo("Requested model: {}".format(requested_model))
+    typer.echo("Previous model: {}".format(data.get("previous_model") or "none"))
+    typer.echo("Loaded model: {}".format(data.get("loaded_model") or "none"))
+    typer.echo("Lifecycle: {}".format(data.get("lifecycle_state", "unknown")))
+    typer.echo("Elapsed: {}s".format(data.get("elapsed_seconds", 0)))
+    if data.get("persisted"):
+        typer.echo("Persisted to config.yaml: yes")
 
 
 def _server_command():
@@ -301,6 +327,7 @@ def _backend_state() -> BackendState:
         pid_matches_backend = False
 
     health, health_ok = _health_result()
+    loaded_model, target_model = _runtime_models()
     return BackendState(
         pid=pid,
         pid_running=pid_running,
@@ -310,7 +337,20 @@ def _backend_state() -> BackendState:
         port_open=_port_is_open(),
         matching_processes=_matching_backend_processes(),
         lifecycle_state=_lifecycle_state(),
+        loaded_model=loaded_model,
+        target_model=target_model,
     )
+
+
+def _runtime_models():
+    body = _health_text()
+    if body.startswith("unavailable"):
+        return None, None
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None, None
+    return data.get("loaded_model"), data.get("target_model")
 
 
 def _remove_stale_pid(pid: Optional[int]) -> None:
@@ -667,6 +707,10 @@ def status():
     typer.echo("Managed by CLI: {}".format("yes" if state.managed_by_cli else "no"))
     typer.echo("PID: {}".format(state.pid if state.pid else "none"))
     typer.echo("Model: {}".format(config.model.id))
+    if state.loaded_model and state.loaded_model != config.model.id:
+        typer.echo("Loaded model (runtime): {}".format(state.loaded_model))
+    if state.target_model:
+        typer.echo("Target model (transition): {}".format(state.target_model))
     typer.echo("GPU: {}".format(config.backend.gpu))
     typer.echo("Host: {}".format(config.backend.host))
     typer.echo("Port: {}".format(config.backend.port))
@@ -800,27 +844,47 @@ def model_info(model_id: str):
 
 
 @model_app.command("load")
-def model_load(model_id: str):
-    """Load a model into the running backend (not implemented yet)."""
-    status_code, body = _post_json(_admin_url("/admin/model/load"), {"model_id": model_id})
-    _echo_lifecycle_stub_result(status_code, body)
-    raise typer.Exit(code=1)
+def model_load(
+    model_id: str,
+    timeout: int = typer.Option(120, "--timeout", help="Seconds to wait for the transition."),
+    persist: bool = typer.Option(False, "--persist", help="Also write model.id to config.yaml."),
+    as_json: bool = typer.Option(False, "--json", help="Print the raw JSON result."),
+):
+    """Load a model into the running backend."""
+    status_code, body = _post_json(
+        _admin_url("/admin/model/load"),
+        {"model_id": model_id, "persist": persist},
+        timeout=timeout,
+    )
+    _echo_lifecycle_result(status_code, body, model_id, as_json)
 
 
 @model_app.command("unload")
-def model_unload():
-    """Unload the currently loaded model (not implemented yet)."""
-    status_code, body = _post_json(_admin_url("/admin/model/unload"))
-    _echo_lifecycle_stub_result(status_code, body)
-    raise typer.Exit(code=1)
+def model_unload(
+    timeout: int = typer.Option(120, "--timeout", help="Seconds to wait for the transition."),
+    as_json: bool = typer.Option(False, "--json", help="Print the raw JSON result."),
+):
+    """Unload the currently loaded model."""
+    status_code, body = _post_json(
+        _admin_url("/admin/model/unload"), timeout=timeout
+    )
+    _echo_lifecycle_result(status_code, body, None, as_json)
 
 
 @model_app.command("switch")
-def model_switch(model_id: str):
-    """Switch the running backend to a different model (not implemented yet)."""
-    status_code, body = _post_json(_admin_url("/admin/model/switch"), {"model_id": model_id})
-    _echo_lifecycle_stub_result(status_code, body)
-    raise typer.Exit(code=1)
+def model_switch(
+    model_id: str,
+    timeout: int = typer.Option(120, "--timeout", help="Seconds to wait for the transition."),
+    persist: bool = typer.Option(False, "--persist", help="Also write model.id to config.yaml."),
+    as_json: bool = typer.Option(False, "--json", help="Print the raw JSON result."),
+):
+    """Switch the running backend to a different model."""
+    status_code, body = _post_json(
+        _admin_url("/admin/model/switch"),
+        {"model_id": model_id, "persist": persist},
+        timeout=timeout,
+    )
+    _echo_lifecycle_result(status_code, body, model_id, as_json)
 
 
 @gpu_app.command("list")

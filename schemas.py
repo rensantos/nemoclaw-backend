@@ -32,3 +32,6 @@ class GenerateRequest(BaseModel):
 
 class ModelLifecycleRequest(BaseModel):
     model_id: str
+    # Runtime-only by default. True also rewrites config.yaml's model.id via
+    # ModelManager, so a restart keeps the new model.
+    persist: bool = False

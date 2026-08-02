@@ -337,60 +337,98 @@ class CliHelperTests(unittest.TestCase):
 
         self.assertIn("Model is not configured: missing", output.getvalue())
 
-    def test_model_load_reports_not_implemented_and_exits_nonzero(self):
-        body = json.dumps({
-            "error": "not_implemented",
-            "detail": "Model lifecycle operations are not implemented yet.",
+    def _lifecycle_body(self, **overrides):
+        body = {
+            "status": "ok",
             "lifecycle_state": "ready",
-        })
+            "loaded_model": "other",
+            "previous_model": "tiny",
+            "elapsed_seconds": 0.4,
+            "persisted": False,
+        }
+        body.update(overrides)
+        return json.dumps(body)
 
-        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
+    def test_model_load_reports_success_and_exits_zero(self):
+        with mock.patch.object(
+            cli, "_post_json", return_value=(200, self._lifecycle_body(loaded_model="tiny", previous_model=None))
+        ) as post_json:
             output = io.StringIO()
             with redirect_stdout(output):
-                with self.assertRaises(cli.typer.Exit) as ctx:
-                    cli.model_load("tiny")
+                cli.model_load("tiny", timeout=120, persist=False, as_json=False)
 
         post_json.assert_called_once_with(
-            cli._admin_url("/admin/model/load"), {"model_id": "tiny"}
+            cli._admin_url("/admin/model/load"),
+            {"model_id": "tiny", "persist": False},
+            timeout=120,
         )
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
+        printed = output.getvalue()
+        self.assertIn("Requested model: tiny", printed)
+        self.assertIn("Loaded model: tiny", printed)
+        self.assertIn("Lifecycle: ready", printed)
 
-    def test_model_unload_reports_not_implemented_and_exits_nonzero(self):
-        body = json.dumps({
-            "error": "not_implemented",
-            "detail": "Model lifecycle operations are not implemented yet.",
-            "lifecycle_state": "ready",
-        })
-
-        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
+    def test_model_unload_reports_success(self):
+        with mock.patch.object(
+            cli,
+            "_post_json",
+            return_value=(200, self._lifecycle_body(lifecycle_state="unloaded", loaded_model=None)),
+        ) as post_json:
             output = io.StringIO()
             with redirect_stdout(output):
-                with self.assertRaises(cli.typer.Exit) as ctx:
-                    cli.model_unload()
-
-        post_json.assert_called_once_with(cli._admin_url("/admin/model/unload"))
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
-
-    def test_model_switch_reports_not_implemented_and_exits_nonzero(self):
-        body = json.dumps({
-            "error": "not_implemented",
-            "detail": "Model lifecycle operations are not implemented yet.",
-            "lifecycle_state": "ready",
-        })
-
-        with mock.patch.object(cli, "_post_json", return_value=(501, body)) as post_json:
-            output = io.StringIO()
-            with redirect_stdout(output):
-                with self.assertRaises(cli.typer.Exit) as ctx:
-                    cli.model_switch("other")
+                cli.model_unload(timeout=30, as_json=False)
 
         post_json.assert_called_once_with(
-            cli._admin_url("/admin/model/switch"), {"model_id": "other"}
+            cli._admin_url("/admin/model/unload"), timeout=30
         )
+        printed = output.getvalue()
+        self.assertIn("Loaded model: none", printed)
+        self.assertIn("Lifecycle: unloaded", printed)
+
+    def test_model_switch_passes_persist_and_reports_it(self):
+        with mock.patch.object(
+            cli, "_post_json", return_value=(200, self._lifecycle_body(persisted=True))
+        ) as post_json:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cli.model_switch("other", timeout=120, persist=True, as_json=False)
+
+        post_json.assert_called_once_with(
+            cli._admin_url("/admin/model/switch"),
+            {"model_id": "other", "persist": True},
+            timeout=120,
+        )
+        printed = output.getvalue()
+        self.assertIn("Previous model: tiny", printed)
+        self.assertIn("Loaded model: other", printed)
+        self.assertIn("Persisted to config.yaml: yes", printed)
+
+    def test_model_switch_reports_failure_and_exits_nonzero(self):
+        body = json.dumps({
+            "error": "model_not_configured",
+            "detail": "Model is not configured: bogus",
+            "lifecycle_state": "ready",
+        })
+
+        with mock.patch.object(cli, "_post_json", return_value=(404, body)):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_switch("bogus", timeout=120, persist=False, as_json=False)
+
         self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("Model lifecycle operations are not implemented yet.", output.getvalue())
+        self.assertIn("Model is not configured: bogus", output.getvalue())
+
+    def test_model_switch_json_output_prints_raw_body(self):
+        with mock.patch.object(
+            cli, "_post_json", return_value=(200, self._lifecycle_body())
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                with self.assertRaises(cli.typer.Exit) as ctx:
+                    cli.model_switch("other", timeout=120, persist=False, as_json=True)
+
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(json.loads(output.getvalue())["loaded_model"], "other")
 
     def test_model_load_reports_unreachable_backend_and_exits_nonzero(self):
         with mock.patch.object(

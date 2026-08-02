@@ -1,28 +1,53 @@
+import contextlib
 import logging
+import threading
+import time
 from typing import Optional
 
 from config import settings
-from engines.base import EngineUnavailableError, InferenceEngine
+from engines.base import (
+    EngineUnavailableError,
+    InferenceEngine,
+    LifecycleNotSupportedError,
+    ModelUnavailableError,
+)
 from services.gpu import GPUManager
 from services.lifecycle import (
+    LifecycleConflictError,
     LifecycleState,
+    LifecycleUnavailableError,
     health_status_for_lifecycle_state,
-    lifecycle_not_implemented_response,
+    validate_transition,
 )
+from services.model import ModelManager
 
 _logger = logging.getLogger(__name__)
+
+DEFAULT_DRAIN_TIMEOUT_SECONDS = 120
 
 
 class InferenceService:
     """Application service that owns runtime lifecycle state and delegates
     inference work to an engine."""
 
-    def __init__(self, engine: InferenceEngine, gpu_manager: Optional[GPUManager] = None):
+    def __init__(
+        self,
+        engine: InferenceEngine,
+        gpu_manager: Optional[GPUManager] = None,
+        model_manager: Optional[ModelManager] = None,
+    ):
         self.engine = engine
         self.gpu_manager = gpu_manager
+        self.model_manager = model_manager
+        self.target_model_id = None
+        self.transition_started_at = None
+        self._active_requests = 0
+        self._requests = threading.Condition()
+        self._transition_lock = threading.Lock()
         self._warn_if_gpu_busy()
         self.engine.load_model()
         self.lifecycle_state = LifecycleState.READY
+        self.loaded_model_id = getattr(engine, "model_id", None)
 
     def _warn_if_gpu_busy(self):
         """Log a warning for any configured GPU that already shows
@@ -57,34 +82,236 @@ class InferenceService:
 
         health["status"] = health_status_for_lifecycle_state(self.lifecycle_state)
         health["lifecycle_state"] = self.lifecycle_state.value
+        health["loaded_model"] = self.loaded_model_id
+        health["target_model"] = self.target_model_id
         return health
-
-    def lifecycle_stub_response(self):
-        """Fixed not-implemented body for /admin/model/* stub endpoints.
-
-        Does not change lifecycle_state; load/unload/switch are not
-        implemented yet (Phase 5 Increment 2).
-        """
-        return lifecycle_not_implemented_response(self.lifecycle_state)
 
     def list_models(self):
         return self.engine.list_models()
 
     def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
-        try:
-            return self.engine.chat(
-                messages, max_tokens, temperature, requested_model, think
-            )
-        except EngineUnavailableError:
-            self.lifecycle_state = LifecycleState.DEGRADED
-            raise
+        with self._serving():
+            try:
+                return self.engine.chat(
+                    messages, max_tokens, temperature, requested_model, think
+                )
+            except EngineUnavailableError:
+                self.lifecycle_state = LifecycleState.DEGRADED
+                raise
 
     def generate_text(self, prompt, max_new_tokens, temperature, think=None):
+        with self._serving():
+            try:
+                return self.engine.generate_text(
+                    prompt, max_new_tokens, temperature, think
+                )
+            except EngineUnavailableError:
+                self.lifecycle_state = LifecycleState.DEGRADED
+                raise
+
+    # ---- lifecycle operations (docs/model-lifecycle-design.md) ----
+
+    def load_model(self, model_id, persist=False, timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS):
+        """Loads model_id when nothing is loaded.
+
+        Idempotent when the same model is already ready; loading a
+        *different* model while one is ready is a conflict that directs the
+        operator to switch instead.
+        """
+        with self._transition_lock:
+            self._require_lifecycle_support()
+            self._validate_model_id(model_id)
+
+            if self.lifecycle_state == LifecycleState.READY:
+                if model_id == self.loaded_model_id:
+                    return self._result(model_id, model_id, 0.0, persisted=False)
+                raise LifecycleConflictError(
+                    "Model '{}' is already loaded. Use 'model switch {}' to "
+                    "change the running model.".format(self.loaded_model_id, model_id)
+                )
+
+            return self._transition(
+                LifecycleState.LOADING,
+                LifecycleState.READY,
+                model_id,
+                lambda: self.engine.load_model(model_id),
+                persist,
+                timeout,
+            )
+
+    def unload_model(self, timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS):
+        """Releases the loaded model. Idempotent when already unloaded."""
+        with self._transition_lock:
+            self._require_lifecycle_support()
+
+            if self.lifecycle_state == LifecycleState.UNLOADED:
+                return self._result(None, None, 0.0, persisted=False)
+
+            if self.lifecycle_state == LifecycleState.DEGRADED:
+                # The table's recovery edge is degraded -> unloaded directly;
+                # there is no degraded -> unloading. Nothing is known to be
+                # serving, so there is nothing to drain and the engine call
+                # is best-effort.
+                return self._give_up_and_unload()
+
+            return self._transition(
+                LifecycleState.UNLOADING,
+                LifecycleState.UNLOADED,
+                None,
+                self.engine.unload_model,
+                persist=False,
+                timeout=timeout,
+            )
+
+    def switch_model(
+        self, model_id, persist=False, timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS
+    ):
+        """Moves from one ready model to another in a single transition."""
+        with self._transition_lock:
+            self._require_lifecycle_support()
+            self._validate_model_id(model_id)
+
+            if self.lifecycle_state != LifecycleState.READY:
+                raise LifecycleConflictError(
+                    "Cannot switch from lifecycle state '{}'; no model is "
+                    "currently serving. Use 'model load {}' "
+                    "instead.".format(self.lifecycle_state.value, model_id)
+                )
+
+            return self._transition(
+                LifecycleState.SWITCHING,
+                LifecycleState.READY,
+                model_id,
+                lambda: self.engine.switch_model(model_id),
+                persist,
+                timeout,
+            )
+
+    def _give_up_and_unload(self):
+        previous_model = self.loaded_model_id
         try:
-            return self.engine.generate_text(prompt, max_new_tokens, temperature, think)
-        except EngineUnavailableError:
-            self.lifecycle_state = LifecycleState.DEGRADED
+            self.engine.unload_model()
+        except Exception as exc:
+            _logger.warning(
+                "Best-effort unload from degraded state failed, reporting "
+                "unloaded anyway: %s", exc
+            )
+
+        validate_transition(self.lifecycle_state, LifecycleState.UNLOADED)
+        self.lifecycle_state = LifecycleState.UNLOADED
+        self.loaded_model_id = None
+        self.target_model_id = None
+        self.transition_started_at = None
+        return self._result(None, previous_model, 0.0, persisted=False)
+
+    def _transition(
+        self, transitional_state, final_state, model_id, operation, persist, timeout
+    ):
+        previous_model = self.loaded_model_id
+        previous_state = self.lifecycle_state
+        started_at = time.monotonic()
+
+        validate_transition(self.lifecycle_state, transitional_state)
+        self.lifecycle_state = transitional_state
+        self.target_model_id = model_id
+        self.transition_started_at = started_at
+
+        # New requests are already rejected by _serving() now that state is
+        # not READY; this waits out the ones that were already in flight.
+        self._drain(timeout)
+
+        try:
+            operation()
+        except ModelUnavailableError:
+            # Pre-flight failure: the engine rejected the target before
+            # touching the loaded model, so the previous one is still
+            # intact and serving. Reporting degraded here would take a
+            # healthy backend offline over a bad request.
+            self.lifecycle_state = previous_state
+            self.target_model_id = None
+            self.transition_started_at = None
             raise
+        except Exception:
+            validate_transition(self.lifecycle_state, LifecycleState.DEGRADED)
+            self.lifecycle_state = LifecycleState.DEGRADED
+            self.target_model_id = None
+            self.transition_started_at = None
+            raise
+
+        validate_transition(self.lifecycle_state, final_state)
+        self.lifecycle_state = final_state
+        self.loaded_model_id = model_id
+        self.target_model_id = None
+        self.transition_started_at = None
+
+        persisted = False
+        if persist and model_id is not None:
+            self.model_manager.select_model(model_id)
+            persisted = True
+
+        return self._result(
+            model_id, previous_model, time.monotonic() - started_at, persisted
+        )
+
+    def _result(self, loaded_model, previous_model, elapsed, persisted):
+        return {
+            "status": "ok",
+            "lifecycle_state": self.lifecycle_state.value,
+            "loaded_model": loaded_model,
+            "previous_model": previous_model,
+            "elapsed_seconds": round(elapsed, 3),
+            "persisted": persisted,
+        }
+
+    def _require_lifecycle_support(self):
+        if not self.engine.supports_runtime_lifecycle:
+            raise LifecycleNotSupportedError(type(self.engine).__name__)
+        if self.model_manager is None:
+            raise LifecycleConflictError(
+                "This InferenceService was constructed without a ModelManager, "
+                "so a lifecycle target cannot be validated against the "
+                "configured model catalog."
+            )
+
+    def _validate_model_id(self, model_id):
+        """Rejects anything outside config.yaml's model.available before any
+        runtime change happens (design doc's Failure Modes: "model id is not
+        configured: reject before any runtime change"). Raises ValueError.
+        """
+        self.model_manager.validate_model(model_id)
+
+    @contextlib.contextmanager
+    def _serving(self):
+        with self._requests:
+            if self.lifecycle_state != LifecycleState.READY:
+                raise LifecycleUnavailableError(self.lifecycle_state)
+            self._active_requests += 1
+        try:
+            yield
+        finally:
+            with self._requests:
+                self._active_requests -= 1
+                self._requests.notify_all()
+
+    def _drain(self, timeout):
+        """Waits for in-flight requests to finish. Past the timeout the
+        transition proceeds anyway (design doc: "stop accepting more work
+        and restart the worker anyway"), leaving a warning behind rather
+        than blocking an operator's unload indefinitely.
+        """
+        deadline = time.monotonic() + timeout
+        with self._requests:
+            while self._active_requests > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _logger.warning(
+                        "Drain timed out after %ss with %s request(s) still "
+                        "in flight; proceeding with the transition anyway",
+                        timeout,
+                        self._active_requests,
+                    )
+                    return
+                self._requests.wait(remaining)
 
 
 def _build_engine(config):
@@ -115,4 +342,6 @@ def _build_engine(config):
 
 
 def create_inference_service():
-    return InferenceService(_build_engine(settings), GPUManager(settings))
+    return InferenceService(
+        _build_engine(settings), GPUManager(settings), ModelManager()
+    )

@@ -148,7 +148,10 @@ Phase 5 Increment 1 (state reporting only, no load/unload/switch):
 - `./backend status` prints `Lifecycle: <state>`.
 - No runtime load/unload/switch, no worker supervision, no CUDA changes yet.
 
-Phase 5 Increment 2 (command surface stubs, no lifecycle behavior):
+Phase 5 Increment 2 (command surface stubs, no lifecycle behavior) —
+**superseded by Increment 3 below, which made these endpoints real. The
+`501` stub bodies and their helpers no longer exist; kept here as
+historical record only:**
 
 - Management endpoints under `/admin/model/` (`load`, `unload`, `switch`),
   separate from `/v1/*`, defined in `docs/model-lifecycle-design.md`.
@@ -605,11 +608,97 @@ standing token-overhead cost on every request. A real fix likely needs
 a newer Ollama (same upgrade path as above), not attempted this
 session.
 
-Next milestones: Phase 5 Increment 3 (real model load/unload/switch
-behavior, `docs/model-lifecycle-design.md`) is open. So is the Backend
-Registry (`docs/future-tasks.md`) — its trigger condition (a real second
-live Backend Node) is now met, motivated by the frontend wanting
-user-facing Local-vs-UBI model choice instead of a static `.env` restart.
+Phase 5 Increment 3 (real model load/unload/switch,
+`docs/model-lifecycle-design.md`): the `/admin/model/*` endpoints and
+`./backend model load|unload|switch` now perform real transitions,
+replacing the Increment 2 `501` stubs (`lifecycle_not_implemented_response()`
+and the `LifecycleStubResponse` schema are gone).
+
+- **Engine scope is deliberately split.** Engines declare a new
+  `supports_runtime_lifecycle` class attribute on `InferenceEngine`
+  (default `False`); `InferenceService` enforces the policy. `OllamaEngine`
+  sets it `True` — the daemon owns the CUDA context, so "load" is a
+  tag-presence check plus a pointer change and "unload" is the existing
+  `keep_alive: 0` call. `TransformersEngine` **refuses** every lifecycle
+  op with the new `engines.base.LifecycleNotSupportedError` (HTTP `501`),
+  pointing the operator at editing `model.id` and restarting. That is the
+  honest reading of the design doc's own argument that in-process CUDA
+  cleanup is best-effort and can poison later loads — implementing it
+  anyway would have faked a working operation. Worker supervision (and
+  with it `TransformersEngine` lifecycle support, plus side-by-side
+  switching) stays deferred.
+- **Two validation gates, catalog-restricted.** `ModelManager.validate_model()`
+  rejects any id absent from `config.yaml`'s `model.available` *before the
+  engine is touched at all*; only then does the engine check reality (for
+  Ollama, that the tag is actually pulled — it still never pulls).
+  Switching to an undocumented model is not allowed, by choice.
+- **Persistence is opt-in.** Transitions are runtime-only by default;
+  `--persist` / `"persist": true` additionally rewrites `model.id` via the
+  existing `ModelManager.select_model()`. Keeps `model use` (config, needs
+  restart) and `model switch` (runtime, live) distinct, and stops a
+  frontend model picker from dirtying a tracked config file implicitly.
+- `services/lifecycle.py` now mirrors the design doc's state table as
+  `LEGAL_TRANSITIONS` + `validate_transition()`, so an illegal edge raises
+  instead of silently corrupting state. New `LifecycleUnavailableError`
+  (request arrived while not `ready` -> HTTP `503`, rejected never queued)
+  and `LifecycleConflictError` (illegal-from-this-state -> HTTP `409`).
+  Note `degraded -> unloaded` is a *direct* edge (there is no
+  `degraded -> unloading`), so `unload_model()` has a separate path for it.
+- `InferenceService` counts in-flight requests under a
+  `threading.Condition` and drains them before calling the engine;
+  FastAPI's threadpool makes that concurrency real. Past the drain timeout
+  it proceeds anyway with a warning, so an operator's unload can't be
+  blocked forever by a stuck request. `/health` gained `loaded_model` and
+  `target_model` (the runtime model can differ from config's `model.id`
+  after a non-persisted switch); `./backend status` surfaces both.
+- **CLI options `--timeout` and `--json` only.** `--wait/--no-wait` and
+  `--poll-interval` are deliberately *not* implemented: transitions are
+  synchronous for Ollama, so there is no async state to poll and building
+  a polling loop would fabricate progress reporting that doesn't exist.
+  They belong with worker supervision.
+- **Found live on UBI, fixed in this increment:** switching to a tag that
+  is in `model.available` but not pulled on the daemon left the backend
+  `degraded` — which rejects all inference — even though the engine had
+  correctly verified the target *before* releasing the current model, so
+  the old model was still loaded and fine. One bad request took a healthy
+  backend offline. New `engines.base.ModelUnavailableError` marks "target
+  rejected, nothing changed"; `InferenceService._transition()` restores
+  the pre-transition state for it (HTTP `409 model_unavailable`) instead
+  of degrading, while genuine mid-transition failures still degrade.
+  Every unit test passed while this was broken (the fake engines raised
+  generic exceptions) — lifecycle work needs live validation.
+- `openapi/backend-node.openapi.yaml` amended in the same increment: the
+  three endpoints moved from `x-implementation-status: stub` to
+  `implemented` with new `LifecycleResultResponse`/`LifecycleErrorResponse`
+  schemas and their `404`/`409`/`501`/`503` cases; `persist` added to
+  `ModelLifecycleRequest`; `loaded_model`/`target_model` added to
+  `HealthResponse`; the chat/generate `503` now also covers
+  mid-transition rejection.
+
+Live-validated on UBI end to end against the real Ollama daemon and
+`qwen3:30b` (2026-08-02), pulling `qwen3:1.7b` (1.4GB) as a second tag for
+the switch test and `ollama rm`-ing it afterwards to restore the
+single-model-at-a-time policy — disk returned to 6.5GB free, and GPU 0/1
+(another user's job) were never touched, checked before and after.
+Confirmed live: `404` on an unconfigured id; `409` on loading a different
+model while ready; idempotent load of the current model; `422` on a
+malformed body; `409 model_unavailable` on a configured-but-not-pulled tag
+with the old model still serving; a real `switch` (`qwen3:30b` ->
+`qwen3:1.7b`) reflected in `/health`, `/v1/models`, `./backend status`'s
+new runtime-divergence line, and a real chat answered by the new model;
+the `model_not_found` guard correctly following the switch (the *old*
+model now `404`s); `unload` making chat return `503`; `load` from
+`unloaded` recovering; and `--persist` writing `config.yaml` in both
+directions, ending byte-identical to the committed file.
+
+Next milestones: Phase 5 worker supervision (the deferred half of
+`docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)
+would unlock `TransformersEngine` lifecycle support and side-by-side
+switching. So is the Backend Registry (`docs/future-tasks.md`) — its
+trigger condition (a real second live Backend Node) is now met, motivated
+by the frontend wanting user-facing Local-vs-UBI model choice instead of a
+static `.env` restart; runtime `model switch` is now the backend half of
+that.
 An OS/driver upgrade on UBI (Ubuntu 24.04 + current driver) is agreed
 but unscheduled - would remove the root cause behind the Qwen3.5/gemma4
 Ollama version gate, the `transformers`/Qwen3 dead end, and broken

@@ -16,7 +16,51 @@ class LifecycleState(str, Enum):
     DEGRADED = "degraded"
 
 
-LIFECYCLE_NOT_IMPLEMENTED_DETAIL = "Model lifecycle operations are not implemented yet."
+class LifecycleUnavailableError(Exception):
+    """Raised when an inference request arrives while the service is not
+    ``ready`` (docs/model-lifecycle-design.md, Concurrency Model: requests
+    during a transition are rejected, never queued).
+    """
+
+    def __init__(self, state: "LifecycleState"):
+        self.state = state
+        super().__init__(
+            "Backend is not ready to serve inference (lifecycle state: "
+            "{}); the request was rejected rather than queued.".format(state.value)
+        )
+
+
+class LifecycleConflictError(Exception):
+    """Raised when a lifecycle operation is not legal from the current
+    state - e.g. loading a different model while one is already ready.
+    """
+
+
+# Mirrors docs/model-lifecycle-design.md's State Transition Table exactly.
+# Kept as data so an illegal transition fails loudly instead of silently
+# corrupting state.
+LEGAL_TRANSITIONS = {
+    LifecycleState.UNLOADED: (LifecycleState.LOADING,),
+    LifecycleState.LOADING: (LifecycleState.READY, LifecycleState.DEGRADED),
+    LifecycleState.READY: (
+        LifecycleState.UNLOADING,
+        LifecycleState.SWITCHING,
+        LifecycleState.DEGRADED,
+    ),
+    LifecycleState.UNLOADING: (LifecycleState.UNLOADED, LifecycleState.DEGRADED),
+    LifecycleState.SWITCHING: (LifecycleState.READY, LifecycleState.DEGRADED),
+    LifecycleState.DEGRADED: (LifecycleState.LOADING, LifecycleState.UNLOADED),
+}
+
+
+def validate_transition(from_state: LifecycleState, to_state: LifecycleState) -> None:
+    if to_state not in LEGAL_TRANSITIONS[from_state]:
+        raise LifecycleConflictError(
+            "Illegal lifecycle transition {} -> {}".format(
+                from_state.value, to_state.value
+            )
+        )
+
 
 _HEALTH_STATUS_BY_LIFECYCLE_STATE = {
     LifecycleState.READY: "ok",
@@ -36,16 +80,3 @@ def health_status_for_lifecycle_state(state: LifecycleState) -> str:
     independent truth source.
     """
     return _HEALTH_STATUS_BY_LIFECYCLE_STATE[state]
-
-
-def lifecycle_not_implemented_response(lifecycle_state: LifecycleState) -> dict:
-    """Fixed stub body for /admin/model/* endpoints (Phase 5 Increment 2).
-
-    Returns the given lifecycle_state without changing it; callers must not
-    use this to perform any lifecycle transition.
-    """
-    return {
-        "error": "not_implemented",
-        "detail": LIFECYCLE_NOT_IMPLEMENTED_DETAIL,
-        "lifecycle_state": lifecycle_state.value,
-    }

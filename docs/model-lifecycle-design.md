@@ -1,6 +1,10 @@
 # Phase 5 Model Lifecycle Design
 
-This is a design document only. It does not implement model lifecycle commands.
+This document designs the full model lifecycle. Increment 3 has since
+implemented most of it for engines that can do it safely — see
+"Increment 3: Real Load/Unload/Switch" below for exactly what landed and
+what is still deferred. Sections above that increment describe the target
+design, not all of which is built.
 
 Phase 5 adds operational lifecycle commands:
 
@@ -117,12 +121,11 @@ transition. The gap was re-surfaced while designing `OllamaEngine`
 model loading makes a mid-request daemon crash a realistic failure mode
 this state machine must represent.
 
-This table is descriptive of the state machine the Minimal Implementation Plan
-below will implement. Increment 1 (current) only introduces the state values
-and reports them; it does not yet implement the transitions themselves. Every
-runtime `InferenceService` currently reports a fixed `ready` state, matching
-the existing startup-load-then-serve behavior. The code's state values (see
-`services/lifecycle.py`) must not diverge from this table.
+As of Increment 3 this table is enforced in code: `services/lifecycle.py`
+mirrors it as `LEGAL_TRANSITIONS`, and `validate_transition()` raises on
+any edge not listed here, so an illegal transition fails loudly instead of
+silently corrupting state. The code's state values and edges must not
+diverge from this table.
 
 ## Runtime Architecture
 
@@ -513,6 +516,114 @@ Integration tests on UBI:
 - Simulate load failure and verify previous model remains serving or degraded
   state is explicit.
 - Measure VRAM before load, after load, and after unload using `GPUManager`.
+
+## Increment 3: Real Load/Unload/Switch
+
+Increment 3 replaced the Increment 2 stubs with real behavior. The
+`/admin/model/*` endpoints and `./backend model load|unload|switch` now
+perform actual transitions; `lifecycle_not_implemented_response()` and
+`LifecycleStubResponse` are gone.
+
+### Engine scope: implemented where it is safe, refused where it is not
+
+This document's core recommendation is that in-process Transformers
+swapping is not a sound production lifecycle mechanism. Increment 3
+honours that rather than working around it:
+
+- `OllamaEngine` implements the full lifecycle. The Ollama daemon owns the
+  CUDA context, so a "load" is a tag-presence check plus a pointer change
+  and an "unload" is `keep_alive: 0` — none of the allocator-fragmentation
+  risk described in "CUDA Cleanup" applies to the backend process.
+- `TransformersEngine` **refuses** every lifecycle operation with
+  `LifecycleNotSupportedError` (HTTP `501`), directing the operator to
+  change `model.id` and restart. Implementing the best-effort in-process
+  swap would have produced an operation that appears to succeed while
+  silently poisoning later loads — worse than not having it, and contrary
+  to AGENTS.md's rule against faking unavailable functionality.
+
+Engines declare the capability via a `supports_runtime_lifecycle` class
+attribute on `InferenceEngine` (default `False`). `InferenceService`
+enforces the policy. The engine says what it *can* do; the service decides
+what *happens* — keeping lifecycle ownership in the service layer.
+
+Worker supervision (Minimal Implementation Plan steps 7-8, and with it
+`TransformersEngine` lifecycle support and side-by-side switching) is
+deferred to a later increment.
+
+### Two validation gates
+
+A lifecycle target passes two independent checks before anything changes:
+
+1. `ModelManager.validate_model()` rejects any id absent from
+   `config/config.yaml`'s `model.available` catalog. Switching to an
+   undocumented model is not permitted, by deliberate choice.
+2. The engine then validates against reality — for `OllamaEngine`, that
+   the tag is actually pulled on the daemon. It still never pulls.
+
+Gate 1 runs before the engine is touched at all, satisfying "model id is
+not configured: reject before any runtime change" under Failure Modes.
+
+### Persistence is opt-in
+
+A transition is runtime-only by default: `config.yaml` is untouched and a
+restart reverts to the configured `model.id`. Passing `"persist": true`
+(CLI `--persist`) additionally rewrites `model.id` through
+`ModelManager.select_model()`. This keeps `./backend model use` (config,
+needs restart) and `./backend model switch` (runtime, live) meaningfully
+distinct, and stops a frontend model picker from dirtying a tracked config
+file unless it explicitly asks to.
+
+### `degraded -> unloaded` is a direct edge
+
+The state table has no `degraded -> unloading` edge, only
+`degraded -> unloaded`. `InferenceService.unload_model()` therefore routes
+an unload from `degraded` through a separate path that transitions
+straight to `unloaded`, with a best-effort engine call whose failure is
+logged rather than raised. Nothing is known to be serving in `degraded`,
+so there is nothing to drain.
+
+### Request accounting and draining
+
+`InferenceService` counts in-flight `chat()`/`generate_text()` calls under
+a `threading.Condition`. A transition rejects new requests (state is no
+longer `ready`) and then waits for the counter to reach zero before
+calling the engine. FastAPI runs these synchronous handlers in a
+threadpool, so this concurrency is real. Past the drain timeout the
+transition proceeds anyway and logs a warning, per "After drain timeout"
+above — an operator's unload is never blocked indefinitely by a stuck
+request.
+
+### Pre-flight failures must not degrade a healthy backend
+
+Found live on UBI, not by unit tests: switching to a tag that is in
+`model.available` but not pulled on the daemon left the backend
+`degraded`, and `degraded` rejects all inference — so a single bad request
+took a perfectly healthy backend offline. The engine had already done the
+right thing (verified the target before releasing the current model), but
+`InferenceService._transition()` treated every exception as a
+mid-transition failure.
+
+`engines.base.ModelUnavailableError` now marks "the target was rejected
+and **nothing was changed**". The service restores the pre-transition
+state instead of going `degraded`, and the API returns `409
+model_unavailable`. Ordinary exceptions — a failure after the engine has
+begun swapping state — still lead to `degraded`, which is the correct
+outcome there.
+
+This is the design doc's own rollback goal ("previous model keeps
+serving") made real for the cheap case, and it is why lifecycle work needs
+live validation: every unit test passed while this was broken, because the
+fake engines raised generic exceptions.
+
+### CLI options: `--timeout` and `--json` only
+
+`--wait/--no-wait` and `--poll-interval` from the CLI Behavior section are
+**not** implemented. Transitions are synchronous for `OllamaEngine`: the
+endpoint returns only after the transition is complete, so there is no
+asynchronous state to poll and no progress to report. Adding a polling
+loop against a synchronous endpoint would fabricate progress reporting
+that does not exist. Those options belong with worker supervision, where
+a load genuinely takes minutes and readiness is genuinely asynchronous.
 
 ## Non-Goals
 

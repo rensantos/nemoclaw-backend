@@ -124,7 +124,9 @@ paths:
         "503":
           description: |
             The engine's backing runtime is unreachable (e.g. the Ollama
-            daemon is down).
+            daemon is down), OR the backend is mid-lifecycle-transition
+            (lifecycle_state is not "ready"). Transition-time requests are
+            rejected, never queued — see /admin/model/*.
           content:
             application/json:
               schema:
@@ -141,10 +143,12 @@ paths:
         native /models endpoint — do not add one; Core and adapters must
         use this endpoint for model discovery.
 
-        Current behavior: returns exactly one entry describing the model
-        loaded at process startup (id, created timestamp, owned_by
-        "local"). It does not enumerate every model configured in
-        config/config.yaml's model.available list.
+        Current behavior: returns exactly one entry describing the
+        currently loaded model (id, created timestamp, owned_by). It does
+        not enumerate every model configured in config/config.yaml's
+        model.available list. The entry tracks runtime state, so it
+        follows a POST /admin/model/switch rather than being fixed at
+        process startup.
       responses:
         "200":
           description: OpenAI-compatible model list.
@@ -261,18 +265,31 @@ paths:
   /admin/model/load:
     post:
       tags: [native-management]
-      summary: Load a model (stub)
+      summary: Load a model
       operationId: adminModelLoad
-      x-implementation-status: stub
+      x-implementation-status: implemented
       description: |
-        Stub. The /admin/* namespace carries NO stability guarantee.
+        The /admin/* namespace carries NO stability guarantee.
 
-        Current semantics: a well-formed request (valid
-        ModelLifecycleRequest body) always returns HTTP 501 with the fixed
-        JSON body produced by lifecycle_not_implemented_response(). It
-        never changes lifecycle_state and never touches the engine or
-        CUDA. A missing or malformed body fails FastAPI request validation
-        first and returns the standard 422, not the 501 stub.
+        Loads model_id when nothing is currently loaded. The target is
+        validated twice before any runtime change: first against
+        config.yaml's model.available catalog (ModelManager), then by the
+        engine against its own reality (for OllamaEngine, that the tag is
+        already pulled — it never pulls).
+
+        State rules (docs/model-lifecycle-design.md, Concurrency Model):
+        - lifecycle_state "ready" and model_id is the loaded model:
+          idempotent success, no engine call.
+        - lifecycle_state "ready" and model_id differs: 409, directing the
+          caller to /admin/model/switch.
+        - lifecycle_state "unloaded" or "degraded": transitions through
+          "loading" to "ready", draining any in-flight requests first.
+
+        Only engines advertising runtime lifecycle support accept this.
+        TransformersEngine returns 501: its CUDA state is owned in-process
+        where cleanup is best-effort, so a supervised worker is required
+        (deferred). A missing or malformed body fails FastAPI request
+        validation first and returns the standard 422.
       requestBody:
         required: true
         content:
@@ -280,12 +297,45 @@ paths:
             schema:
               $ref: "#/components/schemas/ModelLifecycleRequest"
       responses:
-        "501":
-          description: Not implemented (fixed stub body).
+        "200":
+          description: Model loaded (or already loaded).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LifecycleStubResponse"
+                $ref: "#/components/schemas/LifecycleResultResponse"
+        "404":
+          description: model_id is not in config.yaml's model.available catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "409":
+          description: >-
+            Either illegal from the current lifecycle_state (typically
+            loading a different model while one is already ready), or the
+            engine rejected the target in its pre-flight check
+            ("model_unavailable" — e.g. the Ollama tag is configured but
+            not pulled). Pre-flight rejections change nothing: the
+            previously loaded model keeps serving and lifecycle_state is
+            unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "501":
+          description: The active engine does not support runtime lifecycle.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "503":
+          description: >-
+            The engine runtime was unreachable, or the load failed after
+            the pre-flight check had already passed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
         "422":
           description: Missing or malformed request body.
           content:
@@ -296,39 +346,69 @@ paths:
   /admin/model/unload:
     post:
       tags: [native-management]
-      summary: Unload the current model (stub)
+      summary: Unload the current model
       operationId: adminModelUnload
-      x-implementation-status: stub
+      x-implementation-status: implemented
       description: |
-        Stub. The /admin/* namespace carries NO stability guarantee.
+        The /admin/* namespace carries NO stability guarantee.
 
-        Current semantics: takes no request body. Always returns HTTP 501
-        with the fixed JSON body produced by
-        lifecycle_not_implemented_response(). Never changes
-        lifecycle_state and never touches the engine or CUDA.
+        Takes no request body. Drains in-flight requests, then transitions
+        through "unloading" to "unloaded". Idempotent when already
+        unloaded (no engine call). From "degraded" it transitions straight
+        to "unloaded" with a best-effort engine call, since the state
+        table has no degraded -> unloading edge.
+
+        For OllamaEngine this asks the daemon to evict the model
+        (keep_alive: 0). It is best-effort: the backend neither stops nor
+        supervises the daemon process, and eviction is not guaranteed to
+        be synchronous.
+
+        While unloaded, POST /v1/chat/completions and POST /generate
+        return 503.
       responses:
-        "501":
-          description: Not implemented (fixed stub body).
+        "200":
+          description: Model unloaded (or already unloaded).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LifecycleStubResponse"
+                $ref: "#/components/schemas/LifecycleResultResponse"
+        "501":
+          description: The active engine does not support runtime lifecycle.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "503":
+          description: The engine runtime was unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
 
   /admin/model/switch:
     post:
       tags: [native-management]
-      summary: Switch to a different model (stub)
+      summary: Switch to a different model
       operationId: adminModelSwitch
-      x-implementation-status: stub
+      x-implementation-status: implemented
       description: |
-        Stub. The /admin/* namespace carries NO stability guarantee.
+        The /admin/* namespace carries NO stability guarantee.
 
-        Current semantics: a well-formed request (valid
-        ModelLifecycleRequest body) always returns HTTP 501 with the fixed
-        JSON body produced by lifecycle_not_implemented_response(). It
-        never changes lifecycle_state and never touches the engine or
-        CUDA. A missing or malformed body fails FastAPI request validation
-        first and returns the standard 422, not the 501 stub.
+        Single transition from one ready model to another. Requires
+        lifecycle_state "ready"; from any other state this returns 409
+        directing the caller to /admin/model/load. The target is validated
+        against config.yaml's model.available catalog before any runtime
+        change.
+
+        Requests arriving during "switching" are rejected with 503, never
+        queued (docs/model-lifecycle-design.md: queuing hides latency
+        spikes and can answer from either model).
+
+        OllamaEngine verifies the target tag is present on the daemon
+        BEFORE releasing the current model, so a bad target leaves the old
+        model serving and the state stays "ready" — the design doc's
+        rollback goal, cheap for a daemon-owned runtime. A failure after
+        that point leaves lifecycle_state "degraded".
       requestBody:
         required: true
         content:
@@ -336,12 +416,45 @@ paths:
             schema:
               $ref: "#/components/schemas/ModelLifecycleRequest"
       responses:
-        "501":
-          description: Not implemented (fixed stub body).
+        "200":
+          description: Switched; loaded_model is now the requested model.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LifecycleStubResponse"
+                $ref: "#/components/schemas/LifecycleResultResponse"
+        "404":
+          description: model_id is not in config.yaml's model.available catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "409":
+          description: >-
+            Either lifecycle_state was not "ready" (no model to switch
+            from), or the engine rejected the target in its pre-flight
+            check ("model_unavailable" — e.g. the Ollama tag is configured
+            but not pulled). Pre-flight rejections change nothing: the
+            previous model keeps serving and lifecycle_state stays
+            "ready".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "501":
+          description: The active engine does not support runtime lifecycle.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
+        "503":
+          description: >-
+            The engine runtime was unreachable, or the switch failed
+            after the pre-flight check had already passed, leaving
+            lifecycle_state "degraded".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifecycleErrorResponse"
         "422":
           description: Missing or malformed request body.
           content:
@@ -477,9 +590,12 @@ paths:
         "503":
           description: |
             The engine's backing runtime is unreachable (e.g. the Ollama
-            daemon is down). GenerateRequest has no "model" field, so the
-            model-resolution 404 (see POST /v1/chat/completions) does not
-            apply here.
+            daemon is down), OR the backend is mid-lifecycle-transition
+            (lifecycle_state is not "ready"). Transition-time requests are
+            rejected, never queued — see /admin/model/*.
+
+            GenerateRequest has no "model" field, so the model-resolution
+            404 (see POST /v1/chat/completions) does not apply here.
           content:
             application/json:
               schema:
@@ -737,6 +853,17 @@ components:
           description: Single GPU device name, or null if CUDA is unavailable.
         lifecycle_state:
           $ref: "#/components/schemas/LifecycleState"
+        loaded_model:
+          type: [string, "null"]
+          description: >-
+            Model id actually loaded in this running process. Can differ
+            from the "model" field's configured default after a
+            non-persisted POST /admin/model/switch; null while unloaded.
+        target_model:
+          type: [string, "null"]
+          description: >-
+            Model id being transitioned to while lifecycle_state is
+            "loading" or "switching"; null otherwise.
 
     LifecycleStatusResponse:
       type: object
@@ -754,19 +881,60 @@ components:
       properties:
         model_id:
           type: string
+        persist:
+          type: boolean
+          default: false
+          description: >-
+            When true, a successful transition also rewrites model.id in
+            config/config.yaml (via ModelManager.select_model) so a restart
+            keeps the new model. Default false is runtime-only: the change
+            is lost on restart. Nemoclaw extension, not part of any
+            OpenAI spec.
 
-    LifecycleStubResponse:
+    LifecycleResultResponse:
+      type: object
+      required:
+        [status, lifecycle_state, loaded_model, previous_model,
+         elapsed_seconds, persisted]
+      properties:
+        status:
+          type: string
+          const: ok
+        lifecycle_state:
+          $ref: "#/components/schemas/LifecycleState"
+        loaded_model:
+          type: [string, "null"]
+          description: Model id loaded after the transition; null after unload.
+        previous_model:
+          type: [string, "null"]
+          description: Model id loaded before the transition, if any.
+        elapsed_seconds:
+          type: number
+          description: >-
+            Wall-clock duration of the transition, including any wait for
+            in-flight requests to drain.
+        persisted:
+          type: boolean
+          description: Whether config.yaml was rewritten (see request "persist").
+
+    LifecycleErrorResponse:
       type: object
       required: [error, detail, lifecycle_state]
       properties:
         error:
           type: string
-          const: not_implemented
+          enum:
+            - model_not_configured
+            - model_unavailable
+            - lifecycle_conflict
+            - lifecycle_not_supported
+            - engine_unavailable
+            - lifecycle_failed
         detail:
           type: string
-          const: "Model lifecycle operations are not implemented yet."
         lifecycle_state:
           $ref: "#/components/schemas/LifecycleState"
+          description: State at the time the error was returned.
 
     CapabilitiesResponse:
       type: object

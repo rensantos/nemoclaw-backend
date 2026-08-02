@@ -9,9 +9,11 @@ POST /api/generate, including Section 1's model-resolution decision
 (reject a mismatched requested model, never silently substitute) and
 Section 4's token-usage mapping.
 
-Increment 4: unload_model(), the keep_alive: 0 mapping. Exists as a tested
-engine method only - not wired to any live endpoint (Section 5, Non-goals:
-/admin/model/* stays a 501 stub regardless of engine).
+Increment 4: unload_model(), the keep_alive: 0 mapping.
+
+Phase 5 Increment 3 (docs/model-lifecycle-design.md) wired load/unload/
+switch to the live /admin/model/* endpoints for this engine, since the
+daemon owns the CUDA context; model_id is mutable from that point on.
 """
 
 import json
@@ -21,7 +23,12 @@ import urllib.error
 import urllib.request
 from typing import List, Optional
 
-from engines.base import EngineUnavailableError, InferenceEngine, ModelNotFoundError
+from engines.base import (
+    EngineUnavailableError,
+    InferenceEngine,
+    ModelNotFoundError,
+    ModelUnavailableError,
+)
 from services.gpu import GPUManager
 
 
@@ -39,22 +46,38 @@ _logger = logging.getLogger(__name__)
 class OllamaEngine(InferenceEngine):
     """InferenceEngine backed by a live Ollama daemon."""
 
+    # The daemon owns the CUDA context, so a runtime swap here is a
+    # tag-presence check plus a pointer change - none of the in-process
+    # allocator risk that makes TransformersEngine refuse.
+    supports_runtime_lifecycle = True
+
     def __init__(self, config):
         self.config = config
         self.model_id = config.model.id
         self.base_url = config.backend.ollama_host.rstrip("/")
         self.gpu_manager = GPUManager(config)
 
-    def load_model(self) -> None:
-        """Validates the configured tag is present locally. Never pulls."""
-        tags = self._tag_names(self._get_tags())
-        if self.model_id not in tags:
-            raise RuntimeError(
+    def load_model(self, model_id: Optional[str] = None) -> None:
+        """Validates the target tag is present locally. Never pulls."""
+        target = self.model_id if model_id is None else model_id
+        self._require_tag(target)
+        self.model_id = target
+
+    def switch_model(self, model_id: str) -> None:
+        """Verifies the target before releasing the current model, so a
+        missing target leaves the old one serving (the design doc's
+        rollback goal, essentially free for a daemon-owned runtime).
+        """
+        self._require_tag(model_id)
+        self.unload_model()
+        self.model_id = model_id
+
+    def _require_tag(self, model_id: str) -> None:
+        if model_id not in self._tag_names(self._get_tags()):
+            raise ModelUnavailableError(
                 "Ollama tag '{}' is not present on the daemon at {}. Run "
-                "'ollama pull {}' on the machine hosting Ollama, then "
-                "restart the backend.".format(
-                    self.model_id, self.base_url, self.model_id
-                )
+                "'ollama pull {}' on the machine hosting Ollama, then try "
+                "again.".format(model_id, self.base_url, model_id)
             )
 
     def unload_model(self) -> None:

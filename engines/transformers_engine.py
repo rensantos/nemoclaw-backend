@@ -90,7 +90,12 @@ class TransformersEngine(InferenceEngine):
         self.tokenizer = None
         self.model = None
 
-    def load_model(self) -> None:
+    def load_model(self, model_id: Optional[str] = None) -> None:
+        # supports_runtime_lifecycle is False, so InferenceService never
+        # reaches here with a model_id; the parameter exists for contract
+        # parity and is honoured rather than silently ignored.
+        if model_id is not None:
+            self.model_id = model_id
         if self.model is not None and self.tokenizer is not None:
             return
 
