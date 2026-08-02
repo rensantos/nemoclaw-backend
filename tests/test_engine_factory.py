@@ -490,3 +490,45 @@ class OllamaEngineInferenceServiceIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OllamaDaemonDiscoveryTests(unittest.TestCase):
+    """`pgrep -f "ollama serve"` also matches the shell the daemon was
+    launched from, which would double-report every GPU finding."""
+
+    def _pgrep(self, stdout):
+        return mock.patch(
+            "engines.ollama_engine.subprocess.run",
+            return_value=types.SimpleNamespace(stdout=stdout, stderr=""),
+        )
+
+    def _cmdlines(self, mapping):
+        def fake_open(path, *args, **kwargs):
+            pid = int(str(path).split("/")[2])
+            return mock.mock_open(read_data=mapping[pid])()
+
+        return mock.patch("builtins.open", side_effect=fake_open)
+
+    def test_excludes_the_shell_wrapper_that_merely_mentions_ollama(self):
+        from engines.ollama_engine import find_daemon_pids
+
+        cmdlines = {
+            23823: b"bash\0-c\0cd ~/ollama && ./bin/ollama serve\0",
+            23825: b"./bin/ollama\0serve\0",
+        }
+        with self._pgrep("23823\n23825\n"), self._cmdlines(cmdlines):
+            self.assertEqual(find_daemon_pids(), [23825])
+
+    def test_keeps_pid_when_cmdline_is_unreadable(self):
+        from engines.ollama_engine import find_daemon_pids
+
+        with self._pgrep("999\n"), mock.patch("builtins.open", side_effect=OSError):
+            self.assertEqual(find_daemon_pids(), [999])
+
+    def test_returns_empty_when_pgrep_is_unavailable(self):
+        from engines.ollama_engine import find_daemon_pids
+
+        with mock.patch(
+            "engines.ollama_engine.subprocess.run", side_effect=OSError
+        ):
+            self.assertEqual(find_daemon_pids(), [])

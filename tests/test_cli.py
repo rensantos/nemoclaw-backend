@@ -640,17 +640,29 @@ class ExternalRuntimeGPUCheckTests(unittest.TestCase):
             result = cli._check_external_runtime_gpus(force=force)
         return result, output.getvalue()
 
-    def test_refuses_when_daemon_can_reach_a_busy_gpu(self):
+    def test_warns_but_proceeds_while_free_gpus_remain(self):
+        """The daemon sees every GPU, so one busy card must not block every
+        start on a shared box - Ollama schedules by free VRAM and will take
+        a free one."""
         unsafe = [self._gpu("0", 6658, 80)]
         free = [self._gpu("2"), self._gpu("3")]
 
         allowed, printed = self._run(unsafe, free)
 
-        self.assertFalse(allowed)
+        self.assertTrue(allowed)
         self.assertIn("GPU 0", printed)
         self.assertIn("does NOT constrain the daemon", printed)
-        # Must hand the operator the exact fix, pinned to the free GPUs.
+        self.assertIn("proceeding", printed)
+        # Still hands over the exact fix to rule it out entirely.
         self.assertIn("CUDA_VISIBLE_DEVICES=2,3 ollama serve", printed)
+
+    def test_refuses_only_when_no_reachable_gpu_is_free(self):
+        unsafe = [self._gpu("0", 6658, 80), self._gpu("1", 6658, 87)]
+
+        allowed, printed = self._run(unsafe, free=[])
+
+        self.assertFalse(allowed)
+        self.assertIn("no safe placement", printed)
 
     def test_allows_when_daemon_is_pinned_away_from_busy_gpus(self):
         allowed, printed = self._run(unsafe=[], free=[self._gpu("2")])
@@ -658,13 +670,13 @@ class ExternalRuntimeGPUCheckTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(printed, "")
 
-    def test_force_warns_but_proceeds(self):
+    def test_force_proceeds_even_when_nothing_is_free(self):
         unsafe = [self._gpu("1", 6658, 87)]
-        allowed, printed = self._run(unsafe, free=[self._gpu("3")], force=True)
+        allowed, printed = self._run(unsafe, free=[], force=True)
 
         self.assertTrue(allowed)
         self.assertIn("--force set", printed)
-        self.assertIn("another user's GPU", printed)
+        self.assertIn("another user's job", printed)
 
     def test_reports_when_no_free_gpu_exists_to_suggest(self):
         unsafe = [self._gpu("0", 6658, 80)]
@@ -672,6 +684,12 @@ class ExternalRuntimeGPUCheckTests(unittest.TestCase):
 
         self.assertFalse(allowed)
         self.assertIn("No free GPU is available", printed)
+
+    def test_skipped_when_daemon_reaches_no_busy_gpu_at_all(self):
+        allowed, printed = self._run(unsafe=[], free=[self._gpu("0"), self._gpu("1")])
+
+        self.assertTrue(allowed)
+        self.assertEqual(printed, "")
 
     def test_skipped_entirely_for_non_ollama_engines(self):
         allowed, printed = self._run(

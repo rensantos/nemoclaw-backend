@@ -719,11 +719,18 @@ its own scheduler picks by free VRAM - luck, not enforcement.
   (engine-specific knowledge, so it lives with the engine; `GPUManager`
   owns the GPU-safety analysis).
 - `cli._check_external_runtime_gpus()` runs before `_check_gpu_before_start`'s
-  existing config check and **refuses to start** when the daemon can reach
-  a busy GPU, printing the exact fix (`CUDA_VISIBLE_DEVICES=<free> ollama
-  serve`). It **reports and refuses rather than restarting the daemon** -
-  this backend deliberately does not own the daemon's lifecycle, and
-  killing it would drop other work.
+  existing config check. It **warns** when the daemon can reach a busy GPU
+  but **refuses only when every reachable GPU is busy** - the case where
+  the daemon has no safe placement left. Either way it prints the pinning
+  fix (`CUDA_VISIBLE_DEVICES=<free> ollama serve`). The warn/refuse split
+  is deliberate: the deployed daemon sees all four GPUs, so
+  "a busy GPU is reachable" becomes true the moment one colleague starts a
+  job. Refusing on that would block nearly every start on this shared box
+  and make `--force` routine, destroying the value of the warning. Ollama
+  schedules by free VRAM, so while anything is free it takes that.
+  It **reports rather than restarting the daemon** - this backend
+  deliberately does not own the daemon's lifecycle, and killing it would
+  drop other work.
 - `--force` still bypasses, but is no longer silent: it names the GPUs
   being overridden and warns that another user's job may be disrupted.
 - `./backend status` and `./backend gpu list` print the availability
@@ -731,12 +738,24 @@ its own scheduler picks by free VRAM - luck, not enforcement.
   per-GPU IN USE/free line.
 
 Live-verified on UBI: real detection read `CUDA_VISIBLE_DEVICES=0,1,2,3`
-off both daemon PIDs, and the refusal + `--force` paths were exercised
+off both daemon PIDs, and the warn/refuse/`--force` paths were exercised
 against a simulated busy GPU 0/1 (the exact situation observed earlier
-that day). **Not done:** the UBI daemon is still launched with all four
-GPUs visible - fixing that is an operator action (`crontab -e` `@reboot`
-line plus a daemon restart), not a code change, and this backend will now
-refuse to start rather than silently risk it.
+that day).
+
+**Operator decisions taken 2026-08-02, deliberately leaving two things
+as they are:**
+
+- The UBI daemon stays launched with all four GPUs visible (both the
+  running process and the `@reboot` crontab line). The user chose this
+  over pinning; the warn/refuse logic above is calibrated for it.
+- `OLLAMA_KEEP_ALIVE` stays unset, i.e. Ollama's 5-minute default. Worth
+  recording because it was initially mistaken for a GPU-pinning concern:
+  `CUDA_VISIBLE_DEVICES` controls *which* GPUs the daemon may use and has
+  no bearing on residency, while `OLLAMA_KEEP_ALIVE` controls *how long*
+  a model stays in VRAM after the last request. Verified live that an
+  idle daemon holds zero VRAM: after testing `qwen3:30b` (~18GB across
+  two cards), `ollama ps` was empty and all four GPUs read 3 MiB. The
+  GPUs already free themselves without any code or config change.
 
 Next milestones: Phase 5 worker supervision (the deferred half of
 `docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)

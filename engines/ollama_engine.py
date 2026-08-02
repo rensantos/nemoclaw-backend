@@ -65,10 +65,27 @@ def find_daemon_pids() -> List[int]:
     pids = []
     for line in result.stdout.split():
         try:
-            pids.append(int(line))
+            pid = int(line)
         except ValueError:
             continue
+        if _is_ollama_executable(pid):
+            pids.append(pid)
     return pids
+
+
+def _is_ollama_executable(pid: int) -> bool:
+    """Whether pid is the ollama binary itself, not a shell that merely
+    mentions it. `pgrep -f "ollama serve"` also matches the `bash -c ...`
+    wrapper the daemon was launched from, which would double-report every
+    finding and read as two separate daemons.
+    """
+    try:
+        with open("/proc/{}/cmdline".format(pid), "rb") as cmdline_file:
+            argv0 = cmdline_file.read().split(b"\0")[0].decode("utf-8", "replace")
+    except (OSError, IndexError):
+        # Can't tell - keep it rather than silently dropping a real daemon.
+        return True
+    return argv0.rsplit("/", 1)[-1] == "ollama"
 
 
 class OllamaEngine(InferenceEngine):

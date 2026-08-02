@@ -382,21 +382,32 @@ configured index(es) already show significant usage from another process
 a model itself - the Ollama daemon does, using whatever devices *it* was
 launched with. `backend.gpu` constrains only this backend's process, so it
 says nothing about where Ollama will place weights. `./backend start`
-therefore also reads the daemon's own `CUDA_VISIBLE_DEVICES` and refuses
-to start if the daemon can reach a GPU someone else is using:
+therefore also reads the daemon's own `CUDA_VISIBLE_DEVICES`:
 
 ```text
 WARNING: the Ollama daemon (PID 23823) can reach GPU(s) that another process is already using:
   GPU 0 ('RTX A4000'): 6658 MiB / 16117 MiB, 80%
   backend.gpu (2,3) does NOT constrain the daemon - it places models itself.
-  Restart the daemon pinned to the free GPU(s):
+  Free GPU(s) remain (2, 3), and Ollama schedules by free VRAM, so it should pick those - proceeding.
+  To rule it out entirely, restart the daemon pinned to them:
     CUDA_VISIBLE_DEVICES=2,3 ollama serve
-Refusing to start while the model runtime can reach a busy GPU.
 ```
 
-The backend reports and refuses rather than restarting the daemon: it does
-not own the daemon's lifecycle, and stopping it would drop other work.
-Pinning the daemon is an operator action.
+It **warns** while any reachable GPU is still free, and **refuses** only
+when every reachable GPU is busy - the case where the daemon has no safe
+placement. A daemon that can see all GPUs would otherwise be "unsafe" the
+moment any colleague starts a job, blocking nearly every start and making
+`--force` routine.
+
+The backend reports rather than restarting the daemon: it does not own the
+daemon's lifecycle, and stopping it would drop other work. Pinning the
+daemon is an operator action.
+
+Note that `CUDA_VISIBLE_DEVICES` (*which* GPUs the daemon may use) is
+unrelated to `OLLAMA_KEEP_ALIVE` (*how long* a model stays in VRAM after
+the last request, default 5 minutes). An idle Ollama daemon holds no GPU
+memory at all - the model is evicted automatically and the GPUs return to
+free without any action.
 
 `./backend restart` passes `--force` through to the `start` step the same
 way.

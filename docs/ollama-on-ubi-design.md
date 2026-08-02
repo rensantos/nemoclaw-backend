@@ -89,11 +89,19 @@ job — check `nvidia-smi` before trusting this is still current, per
 > picks by free VRAM — luck, not enforcement.
 >
 > `./backend start` now detects this (reads the daemon's
-> `/proc/<pid>/environ`) and refuses to start whenever the daemon can
-> reach a GPU someone else is using, printing the pinned restart command.
+> `/proc/<pid>/environ`). It **warns** while any reachable GPU is still
+> free — Ollama schedules by free VRAM, so it will take those — and
+> **refuses** only when every reachable GPU is busy and the daemon has no
+> safe placement left. Either way it prints the pinned restart command.
 > The backend does not restart the daemon itself — that stays an operator
-> action, and it must be fixed in **both** places: the running process and
-> the `@reboot` crontab line.
+> action, and it would have to be fixed in **both** places: the running
+> process and the `@reboot` crontab line.
+>
+> **Decision (2026-08-02): left as-is on purpose.** The user chose to keep
+> all four GPUs visible rather than pin the daemon; the warn-vs-refuse
+> split above is calibrated for exactly that. This paragraph documents a
+> known, accepted divergence from the command block above, not a pending
+> task.
 
 **Reboot survival**: a `crontab -e` `@reboot` entry running the same command
 survives an actual UBI reboot without needing root (`cron` itself is a

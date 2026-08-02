@@ -560,9 +560,17 @@ def _check_external_runtime_gpus(force: bool = False) -> bool:
 
     So check the daemon's own CUDA_VISIBLE_DEVICES against the live
     in-use set. This backend deliberately does not own the daemon's
-    lifecycle (AGENTS.md), so it reports and refuses rather than
-    restarting anything - and prints the exact command to relaunch the
-    daemon pinned to the free GPUs.
+    lifecycle (AGENTS.md), so it reports rather than restarting anything -
+    and prints the exact command to relaunch the daemon pinned to the
+    free GPUs.
+
+    Warn, but only refuse when the daemon has no safe option left. A
+    daemon that can see every GPU makes "a busy GPU is reachable" true as
+    soon as one colleague starts a job, which on a shared box would block
+    almost every start and make --force routine - eroding the warning it
+    exists to give. Ollama's scheduler picks by free VRAM, so while any
+    GPU is free it will take that one; the genuine danger is when nothing
+    is free and it must spill onto someone's job.
     """
     if config.backend.engine != "ollama":
         return True
@@ -603,23 +611,30 @@ def _check_external_runtime_gpus(force: bool = False) -> bool:
         free = gpu_manager.availability().free
         if free:
             typer.echo(
-                "  Restart the daemon pinned to the free GPU(s):\n"
-                "    CUDA_VISIBLE_DEVICES={} ollama serve".format(
+                "  Free GPU(s) remain ({}), and Ollama schedules by free "
+                "VRAM, so it should pick those - proceeding.".format(
+                    ", ".join(str(gpu.index) for gpu in free)
+                )
+            )
+            typer.echo(
+                "  To rule it out entirely, restart the daemon pinned to "
+                "them:\n    CUDA_VISIBLE_DEVICES={} ollama serve".format(
                     ",".join(str(gpu.index) for gpu in free)
                 )
             )
-        else:
-            typer.echo("  No free GPU is available on this box right now.")
+            continue
 
+        typer.echo("  No free GPU is available on this box right now.")
         if force:
             typer.echo(
-                "--force set: starting anyway. The daemon may still place a "
-                "model on another user's GPU."
+                "--force set: starting anyway. The daemon has no free GPU "
+                "and may place a model on another user's job."
             )
             return True
         typer.echo(
-            "Refusing to start while the model runtime can reach a busy GPU. "
-            "Restart the daemon as shown above, or rerun with --force."
+            "Refusing to start: every GPU the model runtime can reach is "
+            "already in use, so it has no safe placement. Wait for a GPU to "
+            "free up, or rerun with --force."
         )
         return False
 
