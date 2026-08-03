@@ -30,6 +30,34 @@ class LifecycleUnavailableError(Exception):
         )
 
 
+class PullNotSupportedError(Exception):
+    """Raised when a download is requested from an engine that cannot."""
+
+    def __init__(self, engine_name: str):
+        self.engine_name = engine_name
+        super().__init__(
+            "{} cannot download models. Only Ollama-backed nodes support "
+            "this; for a Transformers node, fetch the model into the "
+            "Hugging Face cache and add it to config.yaml's "
+            "model.available.".format(engine_name)
+        )
+
+
+class InsufficientDiskError(Exception):
+    """Raised when a download would not fit, or would leave too little.
+
+    Deliberately an error rather than a warning: everywhere else a
+    heuristic in this backend only warns, because being wrong costs us a
+    failed request. Filling a shared machine's disk costs other people
+    their work (see docs/model-pull-design.md Section 3).
+    """
+
+    def __init__(self, message: str, required_mib=None, free_mib=None):
+        self.required_mib = required_mib
+        self.free_mib = free_mib
+        super().__init__(message)
+
+
 class StreamingNotSupportedError(Exception):
     """Raised when a streaming request reaches an engine that cannot
     stream. Distinct from a lifecycle problem: the backend is healthy, the

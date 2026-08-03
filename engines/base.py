@@ -81,6 +81,11 @@ class InferenceEngine(ABC):
     # what to do about it, keeping lifecycle policy in the service layer.
     supports_runtime_lifecycle = False
 
+    # Whether this engine can download a model on request. False by
+    # default so a new engine cannot silently appear to support it; the
+    # service raises PullNotSupportedError (501) instead.
+    supports_pull = False
+
     supports_streaming = False
 
     def chat_stream(

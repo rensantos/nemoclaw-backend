@@ -310,6 +310,7 @@ class OllamaEngine(InferenceEngine):
     # tag-presence check plus a pointer change - none of the in-process
     # allocator risk that makes TransformersEngine refuse.
     supports_runtime_lifecycle = True
+    supports_pull = True
     supports_streaming = True
 
     def __init__(self, config):
@@ -326,6 +327,40 @@ class OllamaEngine(InferenceEngine):
     def model_storage_path(self) -> Optional[str]:
         """Where the daemon keeps blobs - the filesystem a pull fills."""
         return daemon_models_path()
+
+    def pull_model(self, model_id: str, size_guard=None):
+        """Downloads a tag, streaming Ollama's own progress.
+
+        `size_guard` is called with the total byte count as soon as the
+        daemon reports it, and may raise to abort the download. The size
+        is genuinely not knowable before starting - this is the first
+        point at which a caller can check it against free disk (see
+        docs/model-pull-design.md Section 3).
+
+        Returns the total bytes reported, or None if the daemon never
+        reported one.
+        """
+        total_bytes = None
+        checked = False
+        for event in self._post_stream(
+            "/api/pull", {"model": model_id, "stream": True}
+        ):
+            error = event.get("error")
+            if error:
+                raise ModelUnavailableError(
+                    "Ollama daemon at {} could not pull '{}': {}".format(
+                        self.base_url, model_id, error
+                    )
+                )
+            reported = event.get("total")
+            if reported and not checked:
+                total_bytes = int(reported)
+                checked = True
+                if size_guard is not None:
+                    # Raising here abandons the response, which closes the
+                    # connection and stops the transfer.
+                    size_guard(total_bytes)
+        return total_bytes
 
     def model_disk_size_mib(self, model_id: Optional[str] = None) -> Optional[int]:
         """On-disk size of a tag from GET /api/tags, or None if unknown."""

@@ -14,9 +14,11 @@ from engines.base import (
 from services.gpu import GPUManager
 from services.resources import HostResourceService
 from services.lifecycle import (
+    InsufficientDiskError,
     LifecycleConflictError,
     LifecycleState,
     LifecycleUnavailableError,
+    PullNotSupportedError,
     StreamingNotSupportedError,
     health_status_for_lifecycle_state,
     validate_transition,
@@ -26,6 +28,12 @@ from services.model import ModelManager
 _logger = logging.getLogger(__name__)
 
 DEFAULT_DRAIN_TIMEOUT_SECONDS = 120
+
+# Disk floors for downloads (docs/model-pull-design.md Section 3). The
+# reserve keeps the filesystem off 100%, which breaks everything on a
+# shared box, not just this backend.
+MINIMUM_FREE_MIB = 2048
+DISK_RESERVE_MIB = 2048
 
 
 class InferenceService:
@@ -160,6 +168,87 @@ class InferenceService:
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED
                 raise
+
+    def pull_model(self, model_id: str):
+        """Downloads a model, refusing when the disk cannot take it.
+
+        See docs/model-pull-design.md. Two gates, because the size is not
+        knowable before the download starts: a pre-flight free-space floor,
+        then an in-flight check against the size the daemon reports, which
+        aborts the transfer.
+
+        On success the tag is registered in the catalog, without which it
+        would be invisible to /v1/models and rejected by switch - the whole
+        reason this goes through the backend rather than straight to the
+        daemon.
+        """
+        if not self.engine.supports_pull:
+            raise PullNotSupportedError(type(self.engine).__name__)
+
+        free_mib = self._free_disk_mib()
+        if free_mib is not None and free_mib < MINIMUM_FREE_MIB:
+            raise InsufficientDiskError(
+                "Refusing to download: only {}MiB free on {}, below the "
+                "{}MiB floor. Free space before downloading.".format(
+                    free_mib, self._storage_path(), MINIMUM_FREE_MIB
+                ),
+                free_mib=free_mib,
+            )
+
+        def guard(total_bytes):
+            required_mib = int(total_bytes / (1024 * 1024))
+            if free_mib is None:
+                return  # unknown free space: cannot judge, do not pretend to
+            if required_mib + DISK_RESERVE_MIB > free_mib:
+                raise InsufficientDiskError(
+                    "Refusing to download '{}': it needs {}MiB and only "
+                    "{}MiB is free on {} (keeping {}MiB in reserve so the "
+                    "filesystem does not reach 100%). The partial download "
+                    "was stopped; run 'ollama rm {}' on that machine if it "
+                    "left anything behind.".format(
+                        model_id,
+                        required_mib,
+                        free_mib,
+                        self._storage_path(),
+                        DISK_RESERVE_MIB,
+                        model_id,
+                    ),
+                    required_mib=required_mib,
+                    free_mib=free_mib,
+                )
+
+        total_bytes = self.engine.pull_model(model_id, size_guard=guard)
+
+        registered = False
+        if self.model_manager is not None:
+            try:
+                registered = self.model_manager.register_model(model_id)
+            except Exception:
+                # The download succeeded; failing the whole call now would
+                # misreport what happened on disk.
+                _logger.warning(
+                    "Downloaded %s but could not add it to the catalog", model_id
+                )
+
+        return {
+            "model_id": model_id,
+            "size_mib": None if total_bytes is None else int(total_bytes / (1024 * 1024)),
+            "registered": registered,
+            "free_mib_before": free_mib,
+        }
+
+    def _storage_path(self):
+        try:
+            return self.engine.model_storage_path() or "the model directory"
+        except Exception:
+            return "the model directory"
+
+    def _free_disk_mib(self):
+        try:
+            disk = self.host_resources().disk
+        except Exception:
+            return None
+        return None if disk is None else disk.free_mib
 
     def host_resources(self):
         """Disk, RAM and VRAM for the machine actually serving.

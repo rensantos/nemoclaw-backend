@@ -1080,6 +1080,52 @@ just the status code. Live-verified on UBI before and after: `200` +
 premature connection close before, `404` with the pinned body after, with
 a valid stream still returning content and usage normally.
 
+Host resources + model downloading (2026-08-03,
+`docs/model-pull-design.md`): the frontend gained per-node model
+downloading, which needed two things this backend never had.
+
+- **`GET /resources`** reports disk, system RAM and per-GPU VRAM. Disk was
+  the one resource nothing owned — `GPUManager` covers GPUs — so new
+  `services/resources.py`'s `HostResourceService` owns disk and RAM, per
+  this file's rule that a new capability gets the right owner first. Disk
+  is measured on the filesystem that would actually receive a download:
+  for `OllamaEngine`, the running daemon's own `OLLAMA_MODELS`, read from
+  `/proc/<pid>/environ` (new `daemon_models_path()`) rather than assumed,
+  via the new `InferenceEngine.model_storage_path()`. RAM is included
+  because Ollama sizes context against system RAM, not combined VRAM.
+  Every reading is nullable and null means *unknown*, never zero.
+- **`POST /admin/model/pull`** downloads a tag and registers it in
+  `config.yaml`'s `model.available` (new `ModelManager.register_model()`).
+  The catalog step is the reason this goes through the backend at all: the
+  frontend can already reach UBI's daemon directly, but a tag pulled
+  behind the backend's back is invisible to `/v1/models` and rejected by
+  `/admin/model/switch`, since `validate_model()` gates on the catalog.
+  Pull does **not** switch to the model.
+- **Disk safety refuses rather than warns**, inverting this backend's
+  usual "warn, never block" stance on heuristics. The asymmetry is
+  deliberate: a wrong VRAM estimate fails our own request, while filling
+  this shared volume (99.1% used, ~8GiB free, the rest other researchers'
+  data) costs other people their work. Two gates, because the size is not
+  knowable in advance: a pre-flight floor, then a check against the first
+  size the daemon reports, which aborts the transfer. HTTP `507`.
+  `MINIMUM_FREE_MIB`/`DISK_RESERVE_MIB` are both 2048.
+  **Not done, by choice:** no automatic deletion of other models to make
+  room — destructive, unrecoverable without re-downloading, and on this box
+  the model deleted might be mid-experiment for someone else.
+- `supports_pull` (default `False`) gates it; `TransformersEngine` gets
+  `501` rather than a second download path with different cache semantics.
+- Synchronous, with no progress streaming, job id or cancellation —
+  deliberately not faked; they belong with the deferred worker
+  supervision.
+
+Live-validated on UBI end to end: `qwen3:32b` (19265 MiB) refused with
+`507` against 8143 MiB free, transfer aborted with **nothing left on
+disk** (verified by `df` and `ollama list`); `qwen3:0.6b` (498 MiB)
+downloaded in 11s, auto-registered, appeared in `/v1/models` as
+`pulled: true`, switched to and served. Everything restored afterwards:
+model removed, `config.yaml` reverted byte-identical, disk back to 8.0G,
+GPU 0/1 never touched.
+
 Next milestones: **see `docs/completion-plan.md`** — the plan to finish the
 whole project, written 2026-08-03 at v0.6.0. Its headline is that this
 backend is feature-complete for inference and **almost all remaining work

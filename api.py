@@ -14,8 +14,10 @@ from engines.base import (
 )
 from services.inference import create_inference_service
 from services.lifecycle import (
+    InsufficientDiskError,
     LifecycleConflictError,
     LifecycleUnavailableError,
+    PullNotSupportedError,
     StreamingNotSupportedError,
 )
 from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
@@ -282,6 +284,31 @@ def admin_model_load(
 @router.post("/admin/model/unload")
 def admin_model_unload(service=Depends(get_inference_service)):
     return _lifecycle_call(service, service.unload_model)
+
+
+@router.post("/admin/model/pull")
+def admin_model_pull(
+    req: ModelLifecycleRequest, service=Depends(get_inference_service)
+):
+    """Downloads a model onto this node and adds it to the catalog.
+
+    Refuses rather than warns when the disk cannot take it: this backend
+    runs on a shared machine whose volume is ~99% full with other people's
+    data (docs/model-pull-design.md Section 3). Does not switch to the
+    model - downloading and serving are separate decisions.
+    """
+    try:
+        return service.pull_model(req.model_id)
+    except PullNotSupportedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except InsufficientDiskError as exc:
+        # 507 Insufficient Storage says exactly this, and distinguishes a
+        # refusal-on-capacity from a bad request or a missing model.
+        raise HTTPException(status_code=507, detail=str(exc))
+    except ModelUnavailableError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except EngineUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/admin/model/switch")

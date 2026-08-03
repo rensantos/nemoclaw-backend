@@ -499,6 +499,82 @@ paths:
               schema:
                 $ref: "#/components/schemas/HTTPValidationError"
 
+  /admin/model/pull:
+    post:
+      tags: [native-management]
+      summary: Download a model onto this node
+      operationId: pullModel
+      x-implementation-status: implemented
+      x-current-behavior: |
+        Downloads a model and adds it to config.yaml's model.available.
+        See docs/model-pull-design.md.
+
+        The catalog step is not incidental: /v1/models enumerates
+        model.available and ModelManager.validate_model() rejects anything
+        absent from it, so a tag pulled directly into the daemon would be
+        invisible here and rejected by /admin/model/switch. That is why
+        pulling goes through the backend rather than straight to Ollama.
+
+        Does NOT switch to the downloaded model. Downloading and serving
+        are separate decisions, and a pull that evicted the running model
+        would surprise an active conversation.
+
+        Disk safety **refuses rather than warns**, unlike every other
+        heuristic in this backend. The difference is who pays: a wrong
+        VRAM guess fails our own request, while filling a shared machine's
+        volume costs other people their work. Two gates, because a model's
+        size is not knowable before the download starts - a pre-flight
+        free-space floor, then a check against the first size the daemon
+        reports, which aborts the transfer.
+
+        OllamaEngine only. TransformersEngine returns 501; adding a Hub
+        download path would be a second download mechanism with different
+        cache semantics that nothing currently needs.
+
+        Synchronous: the response arrives when the download completes. No
+        progress streaming, job id or cancellation - deliberately not
+        faked, and those belong with the deferred worker supervision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelLifecycleRequest"
+      responses:
+        "200":
+          description: Download finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullResultResponse"
+        "404":
+          description: The daemon could not find or fetch the named tag.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
+        "501":
+          description: This engine cannot download models.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
+        "503":
+          description: The engine's backing runtime is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
+        "507":
+          description: |
+            Refused: the download would not fit, or would leave the
+            filesystem with less than the reserve. The detail message
+            carries the measured requirement and free space.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
+
   /resources:
     get:
       tags: [native-management]
@@ -1110,6 +1186,27 @@ components:
         lifecycle_state:
           $ref: "#/components/schemas/LifecycleState"
           description: State at the time the error was returned.
+
+    PullResultResponse:
+      type: object
+      description: Outcome of a completed download.
+      properties:
+        model_id: { type: string }
+        size_mib:
+          type: integer
+          nullable: true
+          description: >-
+            Size the daemon reported. Null when it reported none - not
+            guessed.
+        registered:
+          type: boolean
+          description: >-
+            Whether the catalog gained an entry. False also means "already
+            listed", so re-downloading a known model is not an error.
+        free_mib_before:
+          type: integer
+          nullable: true
+          description: Free disk before the download; null if undeterminable.
 
     ResourcesResponse:
       type: object

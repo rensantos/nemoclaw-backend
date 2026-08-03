@@ -43,6 +43,36 @@ class ModelManager:
         with self.config_path.open("w", encoding="utf-8") as config_file:
             yaml.safe_dump(raw_config, config_file, sort_keys=False)
 
+    def register_model(self, model_id: str) -> bool:
+        """Adds a model to the selectable catalog, if not already there.
+
+        A freshly downloaded tag is useless without this: /v1/models
+        enumerates model.available, and validate_model() rejects anything
+        absent from it, so the model would be invisible and unselectable.
+
+        Returns True when the catalog was changed, False when the model was
+        already listed (so a repeat download is not an error).
+        """
+        raw_config = self._load()
+        if self._configured_model(model_id, raw_config) is not None:
+            return False
+
+        model_section = raw_config.setdefault("model", {})
+        if not isinstance(model_section, dict):
+            raise ValueError("model section must be a YAML mapping")
+
+        available = model_section.get("available")
+        if not isinstance(available, list):
+            available = []
+        available.append(
+            {"id": model_id, "engine": "ollama", "notes": "added by /admin/model/pull"}
+        )
+        model_section["available"] = available
+
+        with self.config_path.open("w", encoding="utf-8") as config_file:
+            yaml.safe_dump(raw_config, config_file, sort_keys=False)
+        return True
+
     def validate_model(self, model_id: str, raw_config: Optional[dict] = None) -> None:
         if self._configured_model(model_id, raw_config or self._load()) is None:
             raise ValueError("Model is not configured: {}".format(model_id))
