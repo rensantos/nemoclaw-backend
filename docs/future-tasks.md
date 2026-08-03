@@ -335,6 +335,27 @@
 - Remove any remaining direct model-loading or direct runtime calls from
   migrated applications, per: Core never talks directly to inference
   runtimes.
+- **Known outstanding violation, with a concrete blocker (2026-08-03):**
+  the Research Assistant's subprocess research scripts (`/deepweb`,
+  `/evidence`, `/literature`) still speak native Ollama directly, which is
+  why its node definitions carry an `ollama_host` alongside `base_url`.
+  This is *not* laziness — those scripts need three things the pinned
+  contract does not expose:
+  1. **Embeddings.** `/v1/embeddings` is `x-implementation-status:
+     unscheduled` and no `InferenceEngine` defines `embed()`. This is the
+     hard blocker; semantic claim-merging in `deep_web_answer.py` cannot
+     work without it.
+  2. `format: json` (constrained decoding).
+  3. Ollama-style retry ladders over `num_ctx`/`num_predict`, which the
+     frontend uses to recover from context-overflow failures.
+
+  Adding `embed()` + `/v1/embeddings` is the single change that unblocks
+  most of this, and is the natural next backend capability. Everything
+  *else* in that frontend — chat, streaming, model listing, model
+  selection, downloading, host resources — now goes through the contract,
+  including for its Local Node, which runs its own backend instance rather
+  than being talked to directly (fixed 2026-08-03 after the direct-Ollama
+  shortcut was correctly called out as a boundary violation).
 - Use the migrated Research Assistant as an end-to-end validation workload
   when OllamaEngine lands: same queries, switch engine in config, compare
   behavior.
