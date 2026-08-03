@@ -34,7 +34,16 @@ model:
   # docs/problems.md. Superseded until a planned OS upgrade (Ubuntu
   # 24.04 + driver reinstall, not yet scheduled) removes that ceiling.
   id: qwen3:30b
-  max_tokens_default: 256
+  # -1 is Ollama's own "no limit" convention (num_predict), passed
+  # straight through. Unlimited by default so a reasoning model is never
+  # cut off mid-thought: at the previous 256, qwen3:30b routinely spent
+  # its whole budget on hidden <think> before reaching an answer, and the
+  # engine then (correctly, per its never-mislabel rule) flushed that
+  # unfinished reasoning as the answer - which read as raw "Okay, the
+  # user is asking..." text in chat. A caller that wants to spend fewer
+  # tokens still sets max_tokens per request; this is only the default
+  # when they say nothing.
+  max_tokens_default: -1
   temperature_default: 0.7
   # OllamaEngine-only (see engines/ollama_engine.py's _apply_think()).
   # qwen3:30b has a real `thinking` capability (confirmed via `ollama
