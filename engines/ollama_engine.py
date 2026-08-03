@@ -285,6 +285,7 @@ class OllamaEngine(InferenceEngine):
     # tag-presence check plus a pointer change - none of the in-process
     # allocator risk that makes TransformersEngine refuse.
     supports_runtime_lifecycle = True
+    supports_streaming = True
 
     def __init__(self, config):
         self.config = config
@@ -496,6 +497,115 @@ class OllamaEngine(InferenceEngine):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
+    def chat_stream(
+        self,
+        messages: List,
+        max_tokens: Optional[int],
+        temperature: Optional[float],
+        requested_model: Optional[str] = None,
+        think: Optional[bool] = None,
+    ):
+        """Streams deltas from Ollama's NDJSON /api/chat.
+
+        Reasoning is kept out of "content" here exactly as in the
+        non-streaming path, but the split has to be decided *before* any
+        token is emitted, since a stream cannot retract what it already
+        sent. `/api/show`'s capabilities list says up front whether a
+        model reasons at all, so this is a deterministic decision rather
+        than a guess from the token text:
+
+        - No "thinking" capability: every token is the answer. Streams
+          immediately, which is the common case (llama3.2, gemma3,
+          mistral).
+        - Ollama supplies separate `thinking` deltas: emit them as
+          reasoning and content as content, both immediately.
+        - Thinking-capable but leaking inline (qwen3:30b): the reasoning
+          prefix has to be buffered until `</think>` proves where it ends;
+          the answer after it streams normally. If the marker never
+          arrives the model did not actually reason, so the buffer is
+          flushed as content rather than mislabelled.
+        """
+        self._check_requested_model(requested_model)
+        max_new_tokens = (
+            self.config.max_tokens_default if max_tokens is None else max_tokens
+        )
+        temp = self.config.temperature_default if temperature is None else temperature
+
+        payload = {
+            "model": self.model_id,
+            "messages": self._message_dicts(messages),
+            "stream": True,
+            "options": {"temperature": temp, "num_predict": max_new_tokens},
+        }
+        self._apply_think(payload, think)
+
+        may_reason = "thinking" in self.model_capabilities()
+        pending = []
+        # The blank line separating </think> from the answer often lands in
+        # a later chunk than the marker itself, so trimming only the
+        # marker's own chunk would leak a leading newline into content.
+        trim_leading = False
+
+        for chunk in self._post_stream("/api/chat", payload):
+            message = chunk.get("message") or {}
+
+            thinking = message.get("thinking")
+            if thinking:
+                # Ollama separated it for us; nothing to disambiguate.
+                may_reason = False
+                yield {"reasoning": thinking}
+
+            piece = message.get("content") or ""
+            if piece:
+                if trim_leading:
+                    piece = piece.lstrip("\n")
+                    if not piece:
+                        continue
+                    trim_leading = False
+                if not may_reason:
+                    yield {"content": piece}
+                else:
+                    pending.append(piece)
+                    buffered = "".join(pending)
+                    if _REASONING_END in buffered:
+                        reasoning, _, answer = buffered.rpartition(_REASONING_END)
+                        reasoning = reasoning.replace(_REASONING_START, "").strip()
+                        if reasoning:
+                            yield {"reasoning": reasoning}
+                        answer = answer.lstrip("\n")
+                        if answer:
+                            yield {"content": answer}
+                        else:
+                            trim_leading = True
+                        pending, may_reason = [], False
+
+            if chunk.get("done"):
+                if pending:
+                    # No marker ever arrived: this was the answer, not
+                    # reasoning. Emitting it as reasoning would hide the
+                    # whole response.
+                    yield {"content": "".join(pending)}
+                prompt_tokens, completion_tokens = self._usage(chunk)
+                yield {
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                    }
+                }
+
+    def model_capabilities(self, model_id: Optional[str] = None) -> List[str]:
+        """Capability list from POST /api/show (e.g. completion, tools,
+        thinking). Empty when unknown, which callers must read as "no
+        special capability proven" rather than an error."""
+        target = self.model_id if model_id is None else model_id
+        try:
+            shown = self._post("/api/show", {"model": target})
+        except EngineUnavailableError:
+            return []
+        capabilities = shown.get("capabilities")
+        return capabilities if isinstance(capabilities, list) else []
+
     def generate_text(
         self,
         prompt: str,
@@ -570,6 +680,41 @@ class OllamaEngine(InferenceEngine):
             method="POST",
         )
         return self._request(request, _GENERATE_TIMEOUT_SECONDS, path)
+
+    def _post_stream(self, path: str, payload: dict):
+        """Yields parsed objects from an NDJSON response, one per line.
+
+        Kept separate from _post() because the response must be consumed
+        lazily - buffering it whole would defeat the point of streaming.
+        """
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            "{}{}".format(self.base_url, path),
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=_GENERATE_TIMEOUT_SECONDS
+            ) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    try:
+                        decoded = json.loads(line)
+                    except ValueError:
+                        raise EngineUnavailableError(
+                            "Ollama daemon at {} returned invalid JSON from "
+                            "{}".format(self.base_url, path)
+                        )
+                    if isinstance(decoded, dict):
+                        yield decoded
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise EngineUnavailableError(
+                "Ollama daemon is unreachable at {}: {}".format(self.base_url, exc)
+            )
 
     def _request(self, request: urllib.request.Request, timeout: int, path: str) -> dict:
         try:

@@ -81,6 +81,24 @@ class InferenceEngine(ABC):
     # what to do about it, keeping lifecycle policy in the service layer.
     supports_runtime_lifecycle = False
 
+    supports_streaming = False
+
+    def chat_stream(
+        self,
+        messages: List,
+        max_tokens: Optional[int],
+        temperature: Optional[float],
+        requested_model: Optional[str] = None,
+        think: Optional[bool] = None,
+    ):
+        """Yields incremental chat deltas.
+
+        Each item is a dict with any of "content", "reasoning" (text
+        fragments) and "usage" (final token counts, on the last item).
+        Only engines advertising ``supports_streaming`` implement this.
+        """
+        raise NotImplementedError
+
     def model_runtime_info(self, model_ids: List[str]) -> dict:
         """Runtime facts about configured models, keyed by model id.
 

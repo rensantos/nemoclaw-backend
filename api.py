@@ -1,8 +1,9 @@
+import json
 import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import settings
 from engines.base import (
@@ -12,7 +13,11 @@ from engines.base import (
     ModelUnavailableError,
 )
 from services.inference import create_inference_service
-from services.lifecycle import LifecycleConflictError, LifecycleUnavailableError
+from services.lifecycle import (
+    LifecycleConflictError,
+    LifecycleUnavailableError,
+    StreamingNotSupportedError,
+)
 from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
 
 
@@ -33,14 +38,72 @@ def models():
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+def _sse_chunks(deltas, completion_id: str, model_id: str):
+    """Renders engine deltas as OpenAI-convention SSE.
+
+    Each event is a chat.completion.chunk; the stream ends with the
+    conventional [DONE] sentinel. "usage" rides on the final chunk, which
+    OpenAI only sends when asked for it - harmless extra information for
+    clients that ignore it, and the only way a streaming caller can see
+    token counts at all.
+    """
+    created = int(time.time())
+
+    def chunk(delta, finish_reason=None, usage=None):
+        body = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_id,
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish_reason}
+            ],
+        }
+        if usage:
+            body["usage"] = usage
+        return "data: {}\n\n".format(json.dumps(body))
+
+    yield chunk({"role": "assistant"})
+    try:
+        for delta in deltas:
+            if delta.get("reasoning"):
+                yield chunk({"reasoning": delta["reasoning"]})
+            if delta.get("content"):
+                yield chunk({"content": delta["content"]})
+            if delta.get("usage"):
+                yield chunk({}, finish_reason="stop", usage=delta["usage"])
+    except (EngineUnavailableError, LifecycleUnavailableError) as exc:
+        # The response has already begun, so the status code is spent.
+        # Surfacing the error in-band beats a silently truncated answer.
+        yield "data: {}\n\n".format(
+            json.dumps({"error": {"message": str(exc), "type": "server_error"}})
+        )
+    yield "data: [DONE]\n\n"
+
+
 @router.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionRequest):
-    if req.stream:
-        raise HTTPException(status_code=400, detail="Streaming is not supported")
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages must not be empty")
 
     model_id = req.model or settings.model_id
+
+    if req.stream:
+        try:
+            deltas = inference_service.chat_stream(
+                req.messages, req.max_tokens, req.temperature, req.model, req.think
+            )
+        except StreamingNotSupportedError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except LifecycleUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        return StreamingResponse(
+            _sse_chunks(
+                deltas, "chatcmpl-{}".format(uuid.uuid4().hex), model_id
+            ),
+            media_type="text/event-stream",
+        )
+
     try:
         result = inference_service.chat(
             req.messages, req.max_tokens, req.temperature, req.model, req.think

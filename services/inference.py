@@ -16,6 +16,7 @@ from services.lifecycle import (
     LifecycleConflictError,
     LifecycleState,
     LifecycleUnavailableError,
+    StreamingNotSupportedError,
     health_status_for_lifecycle_state,
     validate_transition,
 )
@@ -155,6 +156,45 @@ class InferenceService:
                 return self.engine.chat(
                     messages, max_tokens, temperature, requested_model, think
                 )
+            except EngineUnavailableError:
+                self.lifecycle_state = LifecycleState.DEGRADED
+                raise
+
+    def chat_stream(
+        self, messages, max_tokens, temperature, requested_model=None, think=None
+    ):
+        """Returns an iterator of chat deltas, holding a request slot for
+        the whole stream.
+
+        docs/model-lifecycle-design.md's Streaming Assumptions require
+        active streams to count as active requests: a transition must
+        drain them, not cut them off mid-response. _serving() therefore
+        wraps the entire generator, so the slot is released only when the
+        stream finishes or the client disconnects.
+
+        Deliberately *not* a generator itself: rejections must surface
+        before the response starts, and a generator would defer them to
+        first iteration - by which time the status code is already sent
+        and a 400/503 is no longer possible.
+        """
+        if not self.engine.supports_streaming:
+            raise StreamingNotSupportedError(type(self.engine).__name__)
+        if self.lifecycle_state != LifecycleState.READY:
+            raise LifecycleUnavailableError(self.lifecycle_state)
+
+        return self._stream_deltas(
+            messages, max_tokens, temperature, requested_model, think
+        )
+
+    def _stream_deltas(
+        self, messages, max_tokens, temperature, requested_model, think
+    ):
+        with self._serving():
+            try:
+                for delta in self.engine.chat_stream(
+                    messages, max_tokens, temperature, requested_model, think
+                ):
+                    yield delta
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED
                 raise

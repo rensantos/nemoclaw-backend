@@ -979,17 +979,49 @@ Audit housekeeping (2026-08-03, `docs/audit-87a844d.md`): a full audit at
   now `skipUnless`-guarded. Local and UBI both report 255 tests; the 10
   Transformers tests genuinely run on UBI and skip elsewhere.
 
-Next milestones (recommended order in `docs/audit-87a844d.md`): **SSE
-streaming** is the only remaining change to what the product can do -
-`"stream": true` still returns `400`, which is why
-`/v1/chat/completions` is `partial`, and it is what blocks
-`BenchmarkService.first_token_latency`. Note the lifecycle design requires
-active streams to count as active requests for draining, so it touches
-Increment 3's request accounting. After that: an API test seam (`api.py`
-builds its service at import, so route tests currently assert on *source
-text*; needs dependency injection plus `httpx`), then extracting GPU
-policy out of `cli.py` (1381 lines, now holding real warn/refuse
-decisions that belong to `GPUManager`).
+SSE streaming (2026-08-03, `v0.5.0`+): `"stream": true` on
+`POST /v1/chat/completions` now returns Server-Sent Events in OpenAI's
+chunk format, terminated by `data: [DONE]`. `/v1/chat/completions` moved
+to `implemented`; **no endpoint is `partial` any more**.
+
+- New `InferenceEngine.supports_streaming` + `chat_stream()`;
+  `OllamaEngine` implements it over Ollama's NDJSON `/api/chat` via a new
+  lazy `_post_stream()`. `TransformersEngine` leaves the flag `False` and
+  gets a `400` naming itself - it generates a whole response in one call,
+  so there is no incremental path to expose and faking one would be a lie.
+- `InferenceService.chat_stream()` is **deliberately not a generator**.
+  Rejections (engine cannot stream, lifecycle not ready) must surface
+  before the response starts; a generator defers them to first iteration,
+  by which time the status code is already sent and a `400`/`503` is
+  impossible. It validates eagerly and returns `_stream_deltas()`, which
+  holds `_serving()` for the stream's whole life - satisfying the design
+  doc's requirement that active streams count as active requests and are
+  **drained**, not cut off mid-response (unit-tested: a switch blocks
+  until the stream finishes).
+- **Reasoning in a stream is decided up front, never guessed.** A stream
+  cannot retract what it sent, so `/api/show`'s `capabilities` list
+  (which includes `thinking`) determines the handling before the first
+  token: models that cannot reason stream immediately; models where
+  Ollama supplies separate `thinking` deltas stream both immediately;
+  a model that leaks inline (`qwen3:30b`) has its reasoning prefix
+  buffered until `</think>` proves where it ends, after which the answer
+  streams normally. If the marker never arrives the buffer is flushed as
+  **content**, since mislabelling it as reasoning would hide the entire
+  answer (the `think: false`-honoured case).
+- Live-verified on UBI: a 5-city answer streamed as 17 content events
+  (`'L','is','bon','\n','Port','o'...`) after 1662 chars of reasoning,
+  with usage on the final chunk. Caught and fixed during that run: the
+  blank line after `</think>` usually arrives in a *later* chunk than the
+  marker, so trimming only the marker's own chunk leaked a leading
+  newline into `content`.
+
+Next milestones (recommended order in `docs/audit-87a844d.md`): rewire
+`BenchmarkService.first_token_latency`, which has honestly reported itself
+unavailable all along and is now finally measurable. Then the API test
+seam (`api.py` builds its service at import, so route tests still assert
+on *source text*; needs dependency injection plus `httpx`), then
+extracting GPU policy out of `cli.py` (1381 lines, holding real
+warn/refuse decisions that belong to `GPUManager`).
 
 Also open: Phase 5 worker supervision (the deferred half of
 `docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)

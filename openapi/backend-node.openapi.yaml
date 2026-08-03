@@ -50,16 +50,27 @@ paths:
       tags: [openai-compatible]
       summary: Create a chat completion
       operationId: createChatCompletion
-      x-implementation-status: partial
+      x-implementation-status: implemented
       x-current-behavior: |
-        Non-streaming chat completion is implemented end to end against the
-        configured engine.
+        Both streaming and non-streaming chat completion are implemented
+        end to end against the configured engine.
 
-        "stream" is accepted by the request schema but is NOT implemented:
-        if "stream": true, the handler immediately raises HTTP 400 with
-        {"detail": "Streaming is not supported"} before any inference runs.
-        The target contract (once the streaming phase lands) is
-        Server-Sent Events per OpenAI convention when "stream": true.
+        "stream": true returns Server-Sent Events per OpenAI convention:
+        a sequence of "data: {chat.completion.chunk}" events terminated by
+        "data: [DONE]". The first event carries {"role": "assistant"};
+        subsequent events carry "content" (and, for reasoning models,
+        "reasoning") deltas; the final chunk carries finish_reason "stop"
+        plus "usage". Only engines advertising streaming support accept
+        it - TransformersEngine returns HTTP 400 naming itself, since it
+        generates a whole response in one call and has no incremental
+        path.
+
+        Reasoning models: whether a model reasons is determined from the
+        engine's own capability metadata before any token is emitted, not
+        guessed from the token text, because a stream cannot retract what
+        it already sent. A model that reasons inline (qwen3:30b) has its
+        reasoning prefix buffered until the "</think>" marker proves where
+        it ends; the answer after it streams incrementally as usual.
 
         Model-resolution behavior now differs by active engine
         (docs/ollama-engine-design.md Section 1):
@@ -81,9 +92,8 @@ paths:
           daemon is down), the request fails with HTTP 503 (see the "503"
           response below) rather than hanging or raising an unhandled 500.
       description: |
-        Implemented for non-streaming requests. Streaming ("stream": true)
-        is contractually defined as SSE per OpenAI convention but returns
-        HTTP 400 today; see x-current-behavior.
+        Implemented for both streaming and non-streaming requests; see
+        x-current-behavior for the SSE event shape and reasoning handling.
       requestBody:
         required: true
         content:
@@ -92,15 +102,20 @@ paths:
               $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: Chat completion (non-streaming only, today).
+          description: |
+            Chat completion. Content type depends on "stream": a single
+            JSON object when false, an SSE event stream when true.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionChunk"
         "400":
           description: |
-            Either "stream": true (not supported yet) or an empty
-            "messages" array.
+            An empty "messages" array, or "stream": true against an engine
+            that cannot stream (TransformersEngine).
           content:
             application/json:
               schema:
@@ -731,6 +746,57 @@ components:
                 description: >-
                   Always "stop" today; no other finish reasons are
                   produced (no length/content-filter distinction yet).
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    ChatCompletionChunk:
+      type: object
+      description: >-
+        One SSE event's payload when "stream": true. Sent as
+        "data: {...}\n\n"; the stream ends with the literal
+        "data: [DONE]\n\n" sentinel, which is not JSON.
+      required: [id, object, created, model, choices]
+      properties:
+        id:
+          type: string
+          description: Stable across every chunk of one completion.
+        object:
+          type: string
+          const: chat.completion.chunk
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, delta, finish_reason]
+            properties:
+              index:
+                type: integer
+                const: 0
+              delta:
+                type: object
+                description: >-
+                  Incremental fragment. The first chunk carries only
+                  "role"; later chunks carry "content" or "reasoning"; the
+                  final chunk carries an empty delta.
+                properties:
+                  role:
+                    type: string
+                    const: assistant
+                  content:
+                    type: string
+                  reasoning:
+                    type: string
+                    description: >-
+                      Nemoclaw extension, same meaning as in the
+                      non-streaming response: hidden thinking, kept out of
+                      "content".
+              finish_reason:
+                type: [string, "null"]
+                description: null until the final chunk, then "stop".
         usage:
           $ref: "#/components/schemas/Usage"
 

@@ -30,6 +30,20 @@ class LifecycleUnavailableError(Exception):
         )
 
 
+class StreamingNotSupportedError(Exception):
+    """Raised when a streaming request reaches an engine that cannot
+    stream. Distinct from a lifecycle problem: the backend is healthy, the
+    active engine simply has no incremental path (TransformersEngine
+    generates a whole response in one call)."""
+
+    def __init__(self, engine_name: str):
+        self.engine_name = engine_name
+        super().__init__(
+            "Streaming is not supported by {}. Send the request without "
+            '"stream": true, or run an engine that supports it.'.format(engine_name)
+        )
+
+
 class LifecycleConflictError(Exception):
     """Raised when a lifecycle operation is not legal from the current
     state - e.g. loading a different model while one is already ready.

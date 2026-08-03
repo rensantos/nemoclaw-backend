@@ -414,8 +414,9 @@ Supported options:
 
 `--concurrency` is accepted so command shape is stable for future automation,
 but Phase 4 still runs requests sequentially. `first-token-latency` reports
-that the metric is unavailable until streaming is implemented; it does not fake
-the number.
+that the metric is unavailable rather than faking a number. Streaming now
+exists, so the measurement is finally possible — `BenchmarkService` has not
+been rewired to use it yet.
 
 ## Start
 
@@ -525,6 +526,39 @@ Log: /home/renatobox/ubi-a4000/logs/backend.log
 ```bash
 python -m unittest discover -s tests
 ```
+
+## Streaming
+
+`POST /v1/chat/completions` with `"stream": true` returns Server-Sent Events
+in OpenAI's chunk format:
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Name 5 cities"}],"stream":true}'
+```
+
+```text
+data: {"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"},...}]}
+data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"Lis"},...}]}
+data: {"object":"chat.completion.chunk","choices":[{"delta":{"content":"bon"},...}]}
+data: {"object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{...}}
+data: [DONE]
+```
+
+Token counts ride on the final chunk. Reasoning models emit
+`delta.reasoning` fragments alongside `delta.content`, matching the
+non-streaming split, so a frontend can render a live "thinking" panel or
+ignore it.
+
+Whether a model reasons is read from the engine's capability metadata
+*before* the first token, not guessed from the text — a stream cannot
+retract what it already sent. For a model that reasons inline (`qwen3:30b`)
+the reasoning prefix is buffered until `</think>` proves where it ends;
+everything after streams incrementally.
+
+`TransformersEngine` returns `400` for `"stream": true` rather than faking
+it — it generates a whole response in one call and has no incremental path.
 
 ## Reasoning Models
 

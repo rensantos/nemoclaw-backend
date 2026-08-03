@@ -13,11 +13,13 @@ from services.lifecycle import (
     LifecycleConflictError,
     LifecycleState,
     LifecycleUnavailableError,
+    StreamingNotSupportedError,
 )
 
 
 class FakeEngine:
     supports_runtime_lifecycle = True
+    supports_streaming = False
 
     def __init__(self, model_id="fake-model", runtime_pids=()):
         self.loaded = False
@@ -725,3 +727,95 @@ class ModelListingTests(unittest.TestCase):
         service = InferenceService(FakeEngine())
 
         self.assertEqual(service.list_models(), {"object": "list", "data": []})
+
+
+class StreamingTests(unittest.TestCase):
+    """Streaming must count as an active request for the whole stream, and
+    must reject before the response starts (a generator would defer the
+    rejection past the point where a status code can still be set)."""
+
+    class StreamingEngine(FakeEngine):
+        supports_streaming = True
+
+        def chat_stream(self, messages, max_tokens, temperature,
+                        requested_model=None, think=None):
+            self.calls.append(("chat_stream", requested_model, think))
+            yield {"reasoning": "pondering"}
+            yield {"content": "Lis"}
+            yield {"content": "bon"}
+            yield {"usage": {"prompt_tokens": 1, "completion_tokens": 2,
+                             "total_tokens": 3}}
+
+    def test_yields_engine_deltas_in_order(self):
+        service = _lifecycle_service(self.StreamingEngine())
+
+        deltas = list(service.chat_stream(["m"], 32, 0.5))
+
+        self.assertEqual(deltas[0], {"reasoning": "pondering"})
+        self.assertEqual(deltas[1]["content"], "Lis")
+        self.assertEqual(deltas[-1]["usage"]["total_tokens"], 3)
+
+    def test_rejects_eagerly_when_the_engine_cannot_stream(self):
+        service = _lifecycle_service(FakeEngine())  # supports_streaming False
+
+        # Must raise on the call itself, not on first iteration.
+        with self.assertRaises(StreamingNotSupportedError):
+            service.chat_stream(["m"], 32, 0.5)
+
+    def test_rejects_eagerly_when_not_ready(self):
+        service = _lifecycle_service(self.StreamingEngine())
+        service.lifecycle_state = LifecycleState.SWITCHING
+
+        with self.assertRaises(LifecycleUnavailableError):
+            service.chat_stream(["m"], 32, 0.5)
+
+    def test_stream_counts_as_an_active_request_until_it_finishes(self):
+        service = _lifecycle_service(self.StreamingEngine())
+
+        stream = service.chat_stream(["m"], 32, 0.5)
+        self.assertEqual(service._active_requests, 0)  # not started yet
+
+        next(stream)
+        self.assertEqual(service._active_requests, 1)  # slot held mid-stream
+
+        list(stream)
+        self.assertEqual(service._active_requests, 0)  # released at the end
+
+    def test_a_transition_drains_an_in_flight_stream(self):
+        """The lifecycle design requires streams to be drained, not cut
+        off mid-response."""
+        service = _lifecycle_service(self.StreamingEngine())
+
+        stream = service.chat_stream(["m"], 32, 0.5)
+        next(stream)
+
+        switch_done = threading.Event()
+
+        def do_switch():
+            service.switch_model("other-model")
+            switch_done.set()
+
+        switch_thread = threading.Thread(target=do_switch)
+        switch_thread.start()
+
+        self.assertFalse(switch_done.wait(0.3))  # blocked draining the stream
+
+        list(stream)
+        switch_thread.join(5)
+        self.assertTrue(switch_done.is_set())
+
+    def test_engine_failure_mid_stream_degrades_the_service(self):
+        class FailingStream(FakeEngine):
+            supports_streaming = True
+
+            def chat_stream(self, *args, **kwargs):
+                yield {"content": "partial"}
+                raise EngineUnavailableError("daemon died")
+
+        service = _lifecycle_service(FailingStream())
+
+        with self.assertRaises(EngineUnavailableError):
+            list(service.chat_stream(["m"], 32, 0.5))
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
+        self.assertEqual(service._active_requests, 0)  # slot still released

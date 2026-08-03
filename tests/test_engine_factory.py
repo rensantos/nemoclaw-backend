@@ -915,3 +915,134 @@ class ReasoningSplitTests(unittest.TestCase):
 
         self.assertEqual(result["response"], "Lisbon")
         self.assertEqual(result["reasoning"], "pondering")
+
+
+def _ndjson_response(lines):
+    body = b"".join((json.dumps(o) + "\n").encode("utf-8") for o in lines)
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    return _Response(body)
+
+
+class OllamaStreamingTests(unittest.TestCase):
+    """Whether a model reasons is decided from /api/show capabilities
+    before any token is emitted - a stream cannot retract what it sent."""
+
+    def _engine(self, model_id="qwen3:30b"):
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(_make_config("ollama", model_id=model_id))
+
+    def _stream(self, engine, chunks, capabilities):
+        with mock.patch.object(
+            engine, "model_capabilities", return_value=capabilities
+        ), mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _ndjson_response(chunks),
+        ):
+            return list(engine.chat_stream([_message("user", "hi")], 50, 0.7))
+
+    def test_supports_streaming(self):
+        self.assertTrue(self._engine().supports_streaming)
+
+    def test_non_reasoning_model_streams_every_token_immediately(self):
+        chunks = [
+            {"message": {"content": "Lis"}, "done": False},
+            {"message": {"content": "bon"}, "done": False},
+            {"message": {"content": ""}, "done": True,
+             "prompt_eval_count": 5, "eval_count": 2},
+        ]
+        deltas = self._stream(self._engine(), chunks, capabilities=["completion"])
+
+        self.assertEqual(
+            [d["content"] for d in deltas if "content" in d], ["Lis", "bon"]
+        )
+        self.assertEqual(deltas[-1]["usage"]["total_tokens"], 7)
+
+    def test_separate_thinking_deltas_are_reasoning(self):
+        chunks = [
+            {"message": {"thinking": "weighing"}, "done": False},
+            {"message": {"content": "Lisbon"}, "done": False},
+            {"message": {"content": ""}, "done": True,
+             "prompt_eval_count": 5, "eval_count": 2},
+        ]
+        deltas = self._stream(self._engine(), chunks, capabilities=["thinking"])
+
+        self.assertEqual([d for d in deltas if "reasoning" in d][0]["reasoning"], "weighing")
+        self.assertEqual([d for d in deltas if "content" in d][0]["content"], "Lisbon")
+
+    def test_inline_leak_is_split_at_the_marker(self):
+        """qwen3:30b: reasoning arrives as content tokens, ending </think>."""
+        chunks = [
+            {"message": {"content": "Hmm, "}, "done": False},
+            {"message": {"content": "one word."}, "done": False},
+            {"message": {"content": "\n</think>\n\nLis"}, "done": False},
+            {"message": {"content": "bon"}, "done": False},
+            {"message": {"content": ""}, "done": True,
+             "prompt_eval_count": 5, "eval_count": 4},
+        ]
+        deltas = self._stream(self._engine(), chunks, capabilities=["thinking"])
+
+        reasoning = "".join(d["reasoning"] for d in deltas if "reasoning" in d)
+        content = "".join(d["content"] for d in deltas if "content" in d)
+        self.assertEqual(reasoning, "Hmm, one word.")
+        self.assertEqual(content, "Lisbon")
+        # The answer after the marker still streams incrementally.
+        self.assertEqual(
+            [d["content"] for d in deltas if "content" in d], ["Lis", "bon"]
+        )
+
+    def test_reasoning_capable_model_that_does_not_reason_is_not_mislabelled(self):
+        """think:false honoured: no marker ever arrives, so the buffered
+        text is the answer - emitting it as reasoning would hide it."""
+        chunks = [
+            {"message": {"content": "Por"}, "done": False},
+            {"message": {"content": "to"}, "done": False},
+            {"message": {"content": ""}, "done": True,
+             "prompt_eval_count": 5, "eval_count": 2},
+        ]
+        deltas = self._stream(self._engine(), chunks, capabilities=["thinking"])
+
+        self.assertEqual(
+            "".join(d["content"] for d in deltas if "content" in d), "Porto"
+        )
+        self.assertEqual([d for d in deltas if "reasoning" in d], [])
+
+    def test_rejects_a_mismatched_requested_model_before_streaming(self):
+        from engines.base import ModelNotFoundError
+
+        engine = self._engine()
+        with self.assertRaises(ModelNotFoundError):
+            list(engine.chat_stream([_message("user", "hi")], 50, 0.7,
+                                    requested_model="other:7b"))
+
+    def test_model_capabilities_returns_empty_when_daemon_unreachable(self):
+        engine = self._engine()
+        with mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("refused"),
+        ):
+            self.assertEqual(engine.model_capabilities(), [])
+
+    def test_leading_newlines_after_the_marker_are_trimmed_across_chunks(self):
+        """The blank line after </think> often arrives in a later chunk
+        than the marker, so trimming only the marker's chunk leaks it."""
+        chunks = [
+            {"message": {"content": "thinking"}, "done": False},
+            {"message": {"content": "\n</think>"}, "done": False},
+            {"message": {"content": "\n\n"}, "done": False},
+            {"message": {"content": "Lisbon"}, "done": False},
+            {"message": {"content": ""}, "done": True,
+             "prompt_eval_count": 5, "eval_count": 2},
+        ]
+        deltas = self._stream(self._engine(), chunks, capabilities=["thinking"])
+
+        self.assertEqual(
+            "".join(d["content"] for d in deltas if "content" in d), "Lisbon"
+        )
