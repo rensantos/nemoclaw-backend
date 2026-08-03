@@ -1045,6 +1045,41 @@ The rest of `docs/audit-87a844d.md`'s recommended order is now done too:
   re-verified live; `cli.py` is no longer computing decisions it should
   only be formatting.
 
+Streaming model-resolution guard fixed (2026-08-03, found during the
+frontend streaming integration): `POST /v1/chat/completions` with
+`"stream": true` did **not** enforce the model-resolution check that the
+non-streaming path did. Asking for a model the instance cannot serve
+returned HTTP `200`, then the connection died mid-stream with no `[DONE]`
+and no in-band error — while the same request without `stream` returned a
+clean `404 model_not_found`. The contract had promised the `404` for both
+modes since Increment 3; only the implementation diverged.
+
+Root cause was the exact trap `InferenceService.chat_stream()`'s own
+docstring warns about, in two places at once: both
+`OllamaEngine.chat_stream()` and `InferenceService._stream_deltas()` were
+**generator functions**, so their eager-looking validation did not run
+until the first delta was pulled — long after FastAPI had sent `200`.
+Fixing only the engine was not enough, since the service still deferred
+the engine call. Both now validate on the call and return an inner
+generator; `api.py` maps `ModelNotFoundError` on the streaming branch to
+the same `model_not_found` body as the non-streaming one (extracted to a
+shared `_model_not_found_response()` so the two cannot drift).
+
+Opening the engine iterator eagerly does **not** open the daemon's HTTP
+stream — `_post_stream()` still runs inside the inner generator, so the
+stream is still established and drained inside the `_serving()` slot,
+preserving the lifecycle design's requirement that active streams count as
+active requests.
+
+**Every unit test passed while this was broken**, for the same reason
+recorded for Phase 5 Increment 3: the fake engines in `tests/` return
+`iter([...])` rather than being generator functions, so they validated
+eagerly and hid the real engine's deferral. The three regression tests
+added (engine, service, API) each pin the *eagerness* specifically, not
+just the status code. Live-verified on UBI before and after: `200` +
+premature connection close before, `404` with the pinned body after, with
+a valid stream still returning content and usage normally.
+
 Next milestones: **see `docs/completion-plan.md`** — the plan to finish the
 whole project, written 2026-08-03 at v0.6.0. Its headline is that this
 backend is feature-complete for inference and **almost all remaining work

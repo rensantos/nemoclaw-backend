@@ -269,6 +269,28 @@ class ApiRequestTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("TransformersEngine", response.json()["detail"])
 
+    def test_streaming_with_an_unservable_model_returns_404(self):
+        """The streaming path must return the same model_not_found shape as
+        the non-streaming one. It previously returned 200 and then died
+        mid-stream, because the engine's guard ran on first iteration."""
+        from engines.base import ModelNotFoundError
+
+        self.service.stream_error = ModelNotFoundError("qwen3:32b", "qwen3:30b")
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "model": "qwen3:32b",
+                "stream": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "model_not_found")
+        self.assertIn("qwen3:32b", error["message"])
+
     def test_streaming_while_not_ready_returns_503(self):
         self.service.stream_error = LifecycleUnavailableError(LifecycleState.UNLOADED)
 

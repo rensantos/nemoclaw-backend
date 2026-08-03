@@ -732,6 +732,30 @@ class StreamingTests(unittest.TestCase):
         with self.assertRaises(LifecycleUnavailableError):
             service.chat_stream(["m"], 32, 0.5)
 
+    def test_engine_model_rejection_surfaces_on_the_call_not_on_iteration(self):
+        """The real OllamaEngine.chat_stream() validates the requested
+        model before returning its iterator. The service must therefore
+        call the engine eagerly - if it only did so from inside its own
+        generator, the rejection would land after HTTP 200 was sent and
+        the client would see a dead connection instead of a 404."""
+
+        class ValidatingEngine(FakeEngine):
+            supports_streaming = True
+
+            def chat_stream(self, messages, max_tokens, temperature,
+                            requested_model=None, think=None):
+                if requested_model not in (None, "qwen3:30b"):
+                    raise ModelNotFoundError(requested_model, "qwen3:30b")
+                return iter([{"content": "ok"}])
+
+        service = _lifecycle_service(ValidatingEngine())
+
+        with self.assertRaises(ModelNotFoundError):
+            service.chat_stream(["m"], 32, 0.5, requested_model="qwen3:32b")
+
+        # The rejected request must not have taken a serving slot.
+        self.assertEqual(service._active_requests, 0)
+
     def test_stream_counts_as_an_active_request_until_it_finishes(self):
         service = _lifecycle_service(self.StreamingEngine())
 

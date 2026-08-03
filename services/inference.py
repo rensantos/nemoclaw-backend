@@ -182,18 +182,27 @@ class InferenceService:
         if self.lifecycle_state != LifecycleState.READY:
             raise LifecycleUnavailableError(self.lifecycle_state)
 
-        return self._stream_deltas(
-            messages, max_tokens, temperature, requested_model, think
-        )
+        # Ask the engine for its iterator *here* rather than inside the
+        # generator below. The engine validates the requested model on this
+        # call, and deferring it to first iteration would put it after
+        # FastAPI has sent HTTP 200 - making a 404 impossible and killing
+        # the connection mid-stream instead. Opening the iterator does not
+        # open the daemon's HTTP stream; that happens on first iteration,
+        # inside the _serving() slot below.
+        try:
+            deltas = self.engine.chat_stream(
+                messages, max_tokens, temperature, requested_model, think
+            )
+        except EngineUnavailableError:
+            self.lifecycle_state = LifecycleState.DEGRADED
+            raise
 
-    def _stream_deltas(
-        self, messages, max_tokens, temperature, requested_model, think
-    ):
+        return self._stream_deltas(deltas)
+
+    def _stream_deltas(self, deltas):
         with self._serving():
             try:
-                for delta in self.engine.chat_stream(
-                    messages, max_tokens, temperature, requested_model, think
-                ):
+                for delta in deltas:
                     yield delta
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED

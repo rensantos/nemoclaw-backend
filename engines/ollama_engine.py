@@ -524,6 +524,14 @@ class OllamaEngine(InferenceEngine):
           the answer after it streams normally. If the marker never
           arrives the model did not actually reason, so the buffer is
           flushed as content rather than mislabelled.
+
+        Deliberately *not* a generator itself, for the same reason
+        InferenceService.chat_stream() is not: the model-resolution guard
+        must reject before the response starts. As a generator function
+        the guard below would not run until first iteration, by which
+        point HTTP 200 has been sent and a 404 is impossible - the client
+        would instead see the connection die mid-stream with no [DONE]
+        and no in-band error.
         """
         self._check_requested_model(requested_model)
         max_new_tokens = (
@@ -539,7 +547,9 @@ class OllamaEngine(InferenceEngine):
         }
         self._apply_think(payload, think)
 
-        may_reason = "thinking" in self.model_capabilities()
+        return self._chat_deltas(payload, "thinking" in self.model_capabilities())
+
+    def _chat_deltas(self, payload: dict, may_reason: bool):
         pending = []
         # The blank line separating </think> from the answer often lands in
         # a later chunk than the marker itself, so trimming only the

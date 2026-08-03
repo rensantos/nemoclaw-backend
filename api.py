@@ -103,6 +103,25 @@ def _sse_chunks(deltas, completion_id: str, model_id: str):
     yield "data: [DONE]\n\n"
 
 
+def _model_not_found_response(exc: ModelNotFoundError) -> JSONResponse:
+    """The pinned model_not_found shape, shared by the streaming and
+    non-streaming paths so the two cannot drift apart."""
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": {
+                "message": (
+                    "The model '{}' does not exist or is not currently "
+                    "loaded by this backend instance.".format(exc.requested_model)
+                ),
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "model_not_found",
+            }
+        },
+    )
+
+
 @router.post("/v1/chat/completions")
 def chat_completions(
     req: ChatCompletionRequest, service=Depends(get_inference_service)
@@ -119,6 +138,11 @@ def chat_completions(
             )
         except StreamingNotSupportedError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        except ModelNotFoundError as exc:
+            # Reaches here only because the engine validates eagerly rather
+            # than on first iteration; otherwise the 200 would already be
+            # sent and this 404 impossible.
+            return _model_not_found_response(exc)
         except LifecycleUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
         return StreamingResponse(
@@ -133,22 +157,7 @@ def chat_completions(
             req.messages, req.max_tokens, req.temperature, req.model, req.think
         )
     except ModelNotFoundError as exc:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": {
-                    "message": (
-                        "The model '{}' does not exist or is not currently "
-                        "loaded by this backend instance.".format(
-                            exc.requested_model
-                        )
-                    ),
-                    "type": "invalid_request_error",
-                    "param": "model",
-                    "code": "model_not_found",
-                }
-            },
-        )
+        return _model_not_found_response(exc)
     except (EngineUnavailableError, LifecycleUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

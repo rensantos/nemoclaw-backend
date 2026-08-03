@@ -373,6 +373,23 @@ class OllamaEngineChatTests(unittest.TestCase):
 
         mocked_urlopen.assert_not_called()
 
+    def test_chat_stream_raises_model_not_found_without_iterating(self):
+        """Found live: chat_stream() was a generator function, so this
+        guard did not run until the first delta was pulled - long after
+        FastAPI had sent HTTP 200. The client saw the connection die with
+        no [DONE] and no in-band error instead of a 404. The rejection has
+        to happen on the call itself, before anything is consumed."""
+        engine = self._engine()
+
+        with self._mock_urlopen() as mocked_urlopen:
+            with self.assertRaises(ModelNotFoundError) as ctx:
+                engine.chat_stream(
+                    [_message("user", "hi")], None, None, requested_model="llama3:8b"
+                )
+
+        self.assertEqual(ctx.exception.requested_model, "llama3:8b")
+        mocked_urlopen.assert_not_called()
+
     def test_chat_raises_engine_unavailable_when_daemon_unreachable(self):
         engine = self._engine()
 

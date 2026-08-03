@@ -126,6 +126,10 @@ paths:
             OllamaEngine only, per docs/ollama-engine-design.md Section 1;
             TransformersEngine never returns this today (see
             x-current-behavior).
+
+            Applies to "stream": true identically: the model is resolved
+            before the response begins, so an unservable model is a real
+            404 and never a 200 followed by a broken stream.
           content:
             application/json:
               schema:
