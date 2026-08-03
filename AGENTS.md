@@ -1045,7 +1045,17 @@ The rest of `docs/audit-87a844d.md`'s recommended order is now done too:
   re-verified live; `cli.py` is no longer computing decisions it should
   only be formatting.
 
-Next milestones: nothing from the audit remains. Still open by earlier
+Next milestones: **see `docs/completion-plan.md`** — the plan to finish the
+whole project, written 2026-08-03 at v0.6.0. Its headline is that this
+backend is feature-complete for inference and **almost all remaining work
+is in the frontend** (`nemoclaw-research-assistant`), which as of its
+commit `08b5ee4` uses none of 2026-08-03's work: its
+`OpenAICompatibleProvider.chat()` pops `stream` off kwargs and discards
+it, and `models()` returns bare ids, throwing away the
+`loaded`/`pulled`/`size_mib`/`fits` flags added for a picker. Do not add
+backend surface without checking the frontend needs it.
+
+Nothing from `docs/audit-87a844d.md` remains. Still open by earlier
 explicit decision, not oversight: Phase 5 worker supervision (which would
 unlock `TransformersEngine` lifecycle and side-by-side switching), the
 Backend Registry, the UBI OS/driver upgrade, and persistently pinning the

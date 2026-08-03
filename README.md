@@ -53,6 +53,7 @@ This project should keep a short written trail for every maintenance pass:
 - `docs/developed.md` records what has been built.
 - `docs/problems.md` records known problems and verification gaps.
 - `docs/future-tasks.md` records follow-up work.
+- `docs/completion-plan.md` is the ordered plan to finish the project.
 
 When behavior changes, update the relevant doc in the same pass.
 
