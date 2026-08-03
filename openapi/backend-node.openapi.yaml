@@ -234,24 +234,22 @@ paths:
       tags: [native-management]
       summary: Backend health and runtime status
       operationId: getHealth
-      x-implementation-status: partial
-      x-current-behavior: |
-        Today's only implementation (TransformersEngine, always-ready
-        lifecycle) ever returns "status": "ok" — there is no code path
-        that produces "degraded" or "unavailable" yet. The
-        ok/degraded/unavailable enum on HealthResponse.status is the
-        target contract; real "degraded"/"unavailable" reporting arrives
-        with OllamaEngine health handling (see
-        docs/ollama-engine-design.md). This widens the pinned contract to
-        resolve the gap reported in commit 1078a46: "status" was
-        previously pinned as const "ok" with no way to report a
-        daemon-down or not-yet-servable runtime.
+      x-implementation-status: implemented
       description: |
         Returns engine health merged with the backend's lifecycle state.
         "status" is a pure projection of "lifecycle_state" (see
         HealthResponse), not an independent truth source. "gpu" is a
         single GPU name string (or null), not the richer multi-GPU detail
         GPUManager can produce — see the planned /gpu endpoint for that.
+
+        All three "status" values are reachable and exercised:
+        "ok" while ready, "degraded" when the engine runtime fails
+        unexpectedly (e.g. the Ollama daemon becomes unreachable), and
+        "unavailable" while unloaded or mid-transition. An earlier
+        revision marked this endpoint "partial" because the only engine
+        then implemented could never report anything but "ok"; that has
+        not been true since OllamaEngine and the lifecycle transitions
+        landed.
       responses:
         "200":
           description: Health status.

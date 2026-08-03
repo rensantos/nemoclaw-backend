@@ -955,7 +955,43 @@ as they are:**
   two cards), `ollama ps` was empty and all four GPUs read 3 MiB. The
   GPUs already free themselves without any code or config change.
 
-Next milestones: Phase 5 worker supervision (the deferred half of
+Audit housekeeping (2026-08-03, `docs/audit-87a844d.md`): a full audit at
+`87a844d` found four things worth fixing immediately, all now done.
+
+- **Deleted `model_runtime.py`.** It was imported by nothing, but called
+  `create_inference_service()` at *import time* exactly as `api.py` does -
+  so any future import would have built a second `InferenceService` and
+  triggered a second `engine.load_model()`. `docs/architecture.md` and
+  `docs/developed.md` still advertised it as a live compatibility facade,
+  pointing future work straight at the hazard. Both references removed.
+- **Corrected four stale "`/admin/model/* are 501 stubs`" claims** in
+  `docs/api-contract.md` (x2), `docs/developed.md` and
+  `docs/architecture.md`. False since Phase 5 Increment 3; `501` now means
+  only "this engine does not support runtime lifecycle".
+- **`/health` moved from `partial` to `implemented`.** Its
+  `x-current-behavior` still claimed no code path could produce
+  `degraded`/`unavailable`; both are live and tested. Only
+  `/v1/chat/completions` remains `partial`, correctly - that is streaming.
+- **Optional-dependency tests now skip instead of erroring.**
+  `tests/test_transformers_engine.py` imported `torch` at module scope, so
+  every dev machine without it saw a hard `ImportError` in the suite - easy
+  to normalise as "expected" and mask a real failure. Both test classes are
+  now `skipUnless`-guarded. Local and UBI both report 255 tests; the 10
+  Transformers tests genuinely run on UBI and skip elsewhere.
+
+Next milestones (recommended order in `docs/audit-87a844d.md`): **SSE
+streaming** is the only remaining change to what the product can do -
+`"stream": true` still returns `400`, which is why
+`/v1/chat/completions` is `partial`, and it is what blocks
+`BenchmarkService.first_token_latency`. Note the lifecycle design requires
+active streams to count as active requests for draining, so it touches
+Increment 3's request accounting. After that: an API test seam (`api.py`
+builds its service at import, so route tests currently assert on *source
+text*; needs dependency injection plus `httpx`), then extracting GPU
+policy out of `cli.py` (1381 lines, now holding real warn/refuse
+decisions that belong to `GPUManager`).
+
+Also open: Phase 5 worker supervision (the deferred half of
 `docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)
 would unlock `TransformersEngine` lifecycle support and side-by-side
 switching. So is the Backend Registry (`docs/future-tasks.md`) — its

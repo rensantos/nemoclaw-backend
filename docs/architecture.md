@@ -162,9 +162,9 @@ The Nemoclaw system spec (v1, §6.5) describes flat control endpoints:
 implementation instead adopts `POST /admin/model/load`, `POST
 /admin/model/unload`, and `POST /admin/model/switch` under an `/admin/`
 namespace. This `/admin/*` contract supersedes the spec §6.5 flat paths. The
-rationale: admin operations are unstable and evolving (currently stub `501`
-responses), and grouping them under `/admin/` keeps that instability clearly
-separated from the stable, OpenAI-compatible `/v1/*` surface.
+rationale: admin operations are unstable and evolving, and grouping them
+under `/admin/` keeps that instability clearly separated from the stable,
+OpenAI-compatible `/v1/*` surface.
 
 ## Inference Service
 
@@ -247,11 +247,6 @@ It preserves the current deployment behavior:
 Transformers is the current engine, not the permanent boundary of the backend.
 Do not add future provider logic to Core just because the current backend engine
 is Transformers.
-
-## Compatibility
-
-`model_runtime.py` remains as a thin compatibility facade over the inference
-service for any old local imports. New code should use the service layer.
 
 ## Model Configuration
 

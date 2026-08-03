@@ -27,8 +27,8 @@ file explains the shape of the contract and the decisions behind it.
   implemented — they are status/discovery surfaces, not control surfaces,
   so their response shapes should not need to change shape once shipped.
 - `/admin/*` carries **no stability guarantee**. It is an unstable control
-  surface by design (currently 501 stubs); its request/response shapes may
-  change as real lifecycle behavior lands.
+  surface by design; its request/response shapes may still change as
+  lifecycle behavior evolves (worker supervision is not built yet).
 - `/generate` is implemented but deprecated; it exists only for old local
   callers and should not gain new consumers.
 
@@ -56,9 +56,11 @@ Both surfaces touch lifecycle state, so the split is deliberate:
 - `GET /lifecycle` (planned) is **observability/status only**. It returns
   the current `LifecycleState` and related read-only metadata. It performs
   no transitions and never will.
-- `POST /admin/model/load|unload|switch` (implemented as 501 stubs) is the
-  **authoritative lifecycle control surface** — the only place transitions
-  happen once real behavior lands. This supersedes the Nemoclaw system
+- `POST /admin/model/load|unload|switch` is the **authoritative lifecycle
+  control surface** — the only place transitions happen. Implemented for
+  engines that declare `supports_runtime_lifecycle`; others return `501`
+  (today that means `TransformersEngine`, which needs worker supervision
+  first). This supersedes the Nemoclaw system
   spec's flat `/models/load`, `/models/unload`, `/engines/switch` paths
   (spec §6.5); see commit `61526a9` and `docs/architecture.md`'s "Admin
   surface vs spec" subsection for the full rationale.

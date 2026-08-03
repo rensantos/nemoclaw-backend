@@ -20,7 +20,6 @@ Hugging Face Transformers causal language model on the UBI machine.
   1. environment variables
   2. `config/config.yaml`
   3. hardcoded defaults
-- `model_runtime.py` is a thin compatibility facade over the inference service.
 - `schemas.py` contains Pydantic request models.
 - `server.py` preserves `uvicorn server:app` compatibility and can also run
   the server directly with `python server.py`.
@@ -83,14 +82,18 @@ Hugging Face Transformers causal language model on the UBI machine.
   `/health` reports it alongside `status`, `model`, `cuda`, and `gpu`.
   `backend status` prints `Lifecycle: <state>`.
 - `api.py` exposes `/admin/model/load`, `/admin/model/unload`, and
-  `/admin/model/switch` under `/admin/`, separate from `/v1/*`. For a
-  well-formed request each returns HTTP `501` with a fixed JSON body and
-  never changes `lifecycle_state` or touches the engine/CUDA. `load` and
-  `switch` require a `ModelLifecycleRequest` body (`model_id: str`); a
-  missing/malformed body returns FastAPI's standard `422` instead of the
-  `501` stub. `unload` takes no body and always returns `501`.
-- `backend model load|unload|switch` call those endpoints, print the
-  `detail` message, and exit non-zero. No timeout/wait/progress logic yet.
+  `/admin/model/switch` under `/admin/`, separate from `/v1/*`. They
+  perform real transitions: `InferenceService` validates the target
+  through `ModelManager`, drains in-flight requests, and delegates to the
+  engine. Failures map to `404` (not in the catalog), `409` (illegal from
+  the current state, or the engine's pre-flight rejected it), `501` (the
+  active engine does not support runtime lifecycle) and `503` (runtime
+  unreachable). `load` and `switch` require a `ModelLifecycleRequest` body
+  (`model_id: str`, optional `persist`); a missing/malformed body returns
+  FastAPI's standard `422`. `unload` takes no body.
+- `backend model load|unload|switch` call those endpoints with
+  `--timeout`, `--json` and (load/switch) `--persist`, printing the
+  resulting model and lifecycle state.
 - The `/admin/model/*` namespace is the adopted contract for control
   operations, superseding the Nemoclaw system spec's flat `/models/load`,
   `/models/unload`, `/engines/switch` paths (spec §6.5), to keep unstable
@@ -178,9 +181,11 @@ Hugging Face Transformers causal language model on the UBI machine.
   the design's own framing — the backend doesn't stop or supervise the
   daemon; live testing confirmed the real daemon's `GET /api/ps` can lag
   a few seconds after the call returns before actually clearing the
-  model. Not wired to any live endpoint: `/admin/model/unload` stays a
-  `501` stub for every engine. This completes `OllamaEngine`'s
-  implementation of every `InferenceEngine` method.
+  model. Completed `OllamaEngine`'s implementation of every
+  `InferenceEngine` method. (At the time it was not wired to any live
+  endpoint — `/admin/model/unload` was a `501` stub for every engine.
+  Phase 5 Increment 3 later wired it up for engines that support runtime
+  lifecycle.)
 - `TransformersEngine` quantized loading (`docs/quantization-design.md`):
   new `model.quantization` config (`none` default, `4bit`, `8bit`;
   `MODEL_QUANTIZATION` env override; fails fast on invalid values, same

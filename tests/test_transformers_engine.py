@@ -1,10 +1,22 @@
 import unittest
 from unittest import mock
 
-import torch
-
 from config import BackendConfig, Config, ModelConfig
-from engines.transformers_engine import TransformersEngine, scan_local_cache
+
+# torch and transformers are installed only on the deployment host, not on
+# every dev machine. Skip rather than error, so a red suite always means a
+# real failure instead of a missing optional dependency.
+try:
+    import torch
+
+    from engines.transformers_engine import TransformersEngine, scan_local_cache
+
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the host environment
+    TRANSFORMERS_AVAILABLE = False
+
+
+pytestmark_reason = "torch/transformers not installed on this machine"
 
 
 def _make_config(quantization="none", model_id="test-model", gpu="0", revision=""):
@@ -27,6 +39,7 @@ def _make_config(quantization="none", model_id="test-model", gpu="0", revision="
     )
 
 
+@unittest.skipUnless(TRANSFORMERS_AVAILABLE, pytestmark_reason)
 class TransformersEngineQuantizationTests(unittest.TestCase):
     """docs/quantization-design.md Section 6: verify the exact kwargs
     passed to from_pretrained() per quantization setting, without loading
@@ -125,6 +138,7 @@ class TransformersEngineQuantizationTests(unittest.TestCase):
         self.assertEqual(mocked_model.call_count, 1)
 
 
+@unittest.skipUnless(TRANSFORMERS_AVAILABLE, pytestmark_reason)
 class ScanLocalCacheTests(unittest.TestCase):
     """Read-only local HF cache discovery, independent of config.yaml."""
 
