@@ -387,7 +387,10 @@ class OllamaEngineChatTests(unittest.TestCase):
         with self._mock_urlopen(payload):
             result = engine.generate_text("prompt", 32, 0.5)
 
-        self.assertEqual(result, {"model": "qwen3:1.7b", "response": "generated text"})
+        self.assertEqual(
+            result,
+            {"model": "qwen3:1.7b", "response": "generated text", "reasoning": None},
+        )
 
     def test_generate_text_sends_expected_payload(self):
         engine = self._engine()
@@ -820,3 +823,95 @@ class OllamaModelRuntimeInfoTests(unittest.TestCase):
 
         self.assertNotIn("fits", info["qwen3:30b"])
         self.assertEqual(info["qwen3:30b"]["size_mib"], 26545)
+
+
+class ReasoningSplitTests(unittest.TestCase):
+    """Three live-observed behaviours; one marker-based rule covers all,
+    and is a no-op for models that do no reasoning."""
+
+    def _split(self, content, thinking=None):
+        from engines.ollama_engine import _split_reasoning
+
+        return _split_reasoning(content, thinking)
+
+    def test_uses_ollamas_own_thinking_field_when_present(self):
+        """Dense qwen3 with think enabled: Ollama already separated it and
+        this engine used to discard the field."""
+        content, reasoning = self._split("Lisbon", "Let me recall...")
+
+        self.assertEqual(content, "Lisbon")
+        self.assertEqual(reasoning, "Let me recall...")
+
+    def test_splits_reasoning_leaked_inline_before_the_closing_marker(self):
+        """qwen3:30b MoE leaks it into content; the opening tag is consumed
+        by the prompt, so only </think> is present."""
+        raw = "Hmm, the user wants one word. Alright, Lisbon.\n</think>\n\nLisbon"
+
+        content, reasoning = self._split(raw)
+
+        self.assertEqual(content, "Lisbon")
+        self.assertIn("Hmm, the user wants one word", reasoning)
+        self.assertNotIn("</think>", content)
+        self.assertNotIn("</think>", reasoning)
+
+    def test_handles_a_matched_tag_pair(self):
+        content, reasoning = self._split("<think>weighing it up</think>\n\nLisbon")
+
+        self.assertEqual(content, "Lisbon")
+        self.assertEqual(reasoning, "weighing it up")
+
+    def test_is_a_no_op_for_models_that_do_not_reason(self):
+        """llama3.2 / gemma3 / mistral emit no markers at all."""
+        content, reasoning = self._split("Lisbon")
+
+        self.assertEqual(content, "Lisbon")
+        self.assertIsNone(reasoning)
+
+    def test_splits_on_the_last_marker_when_prose_contains_one(self):
+        raw = "I considered </think> as a token. Done.\n</think>\n\nAnswer"
+
+        content, reasoning = self._split(raw)
+
+        self.assertEqual(content, "Answer")
+        self.assertTrue(reasoning.endswith("Done."))
+
+    def test_empty_reasoning_reports_none_rather_than_a_blank_string(self):
+        content, reasoning = self._split("</think>Lisbon")
+
+        self.assertEqual(content, "Lisbon")
+        self.assertIsNone(reasoning)
+
+    def test_chat_returns_the_split_content_and_reasoning(self):
+        from engines.ollama_engine import OllamaEngine
+
+        engine = OllamaEngine(_make_config("ollama", model_id="qwen3:30b"))
+        payload = {
+            "message": {
+                "role": "assistant",
+                "content": "thinking out loud\n</think>\n\nLisbon",
+            },
+            "prompt_eval_count": 20,
+            "eval_count": 146,
+        }
+        with mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _fake_urlopen_response(payload),
+        ):
+            result = engine.chat([_message("user", "hi")], 300, 0.7)
+
+        self.assertEqual(result["content"], "Lisbon")
+        self.assertEqual(result["reasoning"], "thinking out loud")
+
+    def test_generate_text_splits_too(self):
+        from engines.ollama_engine import OllamaEngine
+
+        engine = OllamaEngine(_make_config("ollama", model_id="qwen3:30b"))
+        payload = {"response": "pondering\n</think>\n\nLisbon"}
+        with mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _fake_urlopen_response(payload),
+        ):
+            result = engine.generate_text("hi", 300, 0.7)
+
+        self.assertEqual(result["response"], "Lisbon")
+        self.assertEqual(result["reasoning"], "pondering")

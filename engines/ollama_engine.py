@@ -50,6 +50,38 @@ VRAM_OVERHEAD_FACTOR = 1.5
 _logger = logging.getLogger(__name__)
 
 
+_REASONING_END = "</think>"
+_REASONING_START = "<think>"
+
+
+def _split_reasoning(content: str, thinking: Optional[str] = None):
+    """Separates a reasoning model's hidden thinking from its answer.
+
+    Three behaviours seen live, all handled here:
+
+    - Ollama already separated it into ``message.thinking`` (dense qwen3
+      with think enabled). Content is the answer; just carry the field
+      through instead of discarding it, as this engine used to.
+    - The chat template leaked it inline, ending with ``</think>``
+      (qwen3:30b MoE, which also ignores ``"think": false`` entirely). The
+      opening tag is usually consumed by the prompt, so split on the last
+      closing marker rather than requiring a matched pair.
+    - No reasoning at all (llama3.2, gemma3, mistral, or thinking
+      disabled). Nothing matches, so this is a no-op.
+
+    Returns (content, reasoning); reasoning is None when there is none.
+    """
+    if thinking:
+        return content, thinking
+
+    if _REASONING_END not in content:
+        return content, None
+
+    reasoning, _, answer = content.rpartition(_REASONING_END)
+    reasoning = reasoning.replace(_REASONING_START, "").strip()
+    return answer.lstrip("\n"), reasoning or None
+
+
 def find_daemon_pids() -> List[int]:
     """PIDs of `ollama serve` processes running on this machine.
 
@@ -450,11 +482,15 @@ class OllamaEngine(InferenceEngine):
         }
         self._apply_think(payload, think)
         response = self._post("/api/chat", payload)
-        content = (response.get("message") or {}).get("content", "")
+        message = response.get("message") or {}
+        content, reasoning = _split_reasoning(
+            message.get("content", ""), message.get("thinking")
+        )
         prompt_tokens, completion_tokens = self._usage(response)
 
         return {
             "content": content,
+            "reasoning": reasoning,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
@@ -475,7 +511,10 @@ class OllamaEngine(InferenceEngine):
         }
         self._apply_think(payload, think)
         response = self._post("/api/generate", payload)
-        return {"model": self.model_id, "response": response.get("response", "")}
+        text, reasoning = _split_reasoning(
+            response.get("response", ""), response.get("thinking")
+        )
+        return {"model": self.model_id, "response": text, "reasoning": reasoning}
 
     def _check_requested_model(self, requested_model: Optional[str]) -> None:
         if requested_model is not None and requested_model != self.model_id:

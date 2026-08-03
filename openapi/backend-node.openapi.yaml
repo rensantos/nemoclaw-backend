@@ -710,6 +710,23 @@ components:
                     const: assistant
                   content:
                     type: string
+                    description: >-
+                      The assistant's answer only. For reasoning models any
+                      hidden thinking is separated out into "reasoning"
+                      below, so an OpenAI-compatible client that renders
+                      just this field never shows internal monologue or a
+                      stray "</think>" marker.
+                  reasoning:
+                    type: string
+                    description: >-
+                      Nemoclaw extension. A reasoning model's hidden
+                      thinking, taken from Ollama's "message.thinking" when
+                      it supplies one, or split off the raw content at the
+                      "</think>" marker when the model's chat template
+                      leaks it inline (qwen3:30b MoE does this, and also
+                      ignores "think": false entirely). Omitted when the
+                      model did no reasoning, which is always the case for
+                      non-reasoning models and for TransformersEngine.
               finish_reason:
                 type: string
                 const: stop
@@ -1123,7 +1140,13 @@ components:
           type: string
           description: >-
             Full decoded output including the prompt (not prompt-stripped,
-            unlike /v1/chat/completions).
+            unlike /v1/chat/completions). Any reasoning is separated into
+            "reasoning" below, same rule as chat completions.
+        reasoning:
+          type: [string, "null"]
+          description: >-
+            Nemoclaw extension. A reasoning model's hidden thinking, or
+            null when there was none.
 
     # --- Shared error schemas -------------------------------------------
     SimpleErrorResponse:

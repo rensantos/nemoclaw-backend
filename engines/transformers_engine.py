@@ -177,6 +177,9 @@ class TransformersEngine(InferenceEngine):
 
         return {
             "content": text,
+            # Interface parity with OllamaEngine; no reasoning-mode concept
+            # here, matching how this engine already ignores `think`.
+            "reasoning": None,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,

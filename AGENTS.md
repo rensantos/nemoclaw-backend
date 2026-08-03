@@ -902,6 +902,44 @@ returns `404 model_not_configured`, and the `pulled/fits` one loads and
 serves. Lazy loading needs no backend code - Ollama reloads an evicted
 model on the next request (confirmed).
 
+Reasoning separated from answers (2026-08-03): reasoning models were
+leaking their hidden thinking into `content`. For "Capital of Portugal?
+One word." `qwen3:30b` returned ~142 tokens of monologue, a stray
+`</think>`, then "Lisbon" - so any OpenAI client rendering `content`
+showed the whole thing, and ~88% of the tokens were invisible-to-the-user
+overhead. Three distinct behaviours were measured live, and one
+marker-based rule (`engines.ollama_engine._split_reasoning()`) covers all:
+
+- **Ollama already separated it** into `message.thinking` (dense `qwen3`
+  with thinking enabled) - the engine was **silently discarding that
+  field**. Now carried through.
+- **The chat template leaked it inline** (`qwen3:30b` MoE, which also
+  ignores `"think": false` entirely - reconfirmed against the raw daemon).
+  The opening tag is consumed by the prompt, so only `</think>` appears;
+  split on the **last** closing marker rather than requiring a matched
+  pair.
+- **No reasoning at all** (`llama3.2`, `gemma3`, `mistral`, or thinking
+  disabled) - nothing matches and the rule is a no-op. **No per-model
+  configuration is needed**, which is the point: it is driven by what the
+  model actually emits.
+
+`content` is now the answer only; the thinking is surfaced as a
+`reasoning` field on the chat message and on `/generate`, omitted entirely
+when there is none (documented as a Nemoclaw extension in the contract).
+`TransformersEngine` returns `reasoning: None` for interface parity,
+matching how it already ignores `think`.
+
+Live-verified across all three: `qwen3:30b` -> `content` exactly
+`"Lisbon"` with 866 chars of reasoning moved aside and no `</think>` left
+in content; `qwen3:1.7b` with `think: true` -> clean content plus 468
+chars from `message.thinking`; same model with `think: false` -> no
+`reasoning` key at all and 3 completion tokens.
+
+Observed, not a backend bug: `qwen3:1.7b` answers **"Porto"** (wrong) with
+thinking disabled and "Lisbon" with it enabled - reproducible at the raw
+daemon too. Disabling reasoning on small reasoning models trades accuracy
+for tokens; worth knowing before setting `think_default: false` on one.
+
 **Operator decisions taken 2026-08-02, deliberately leaving two things
 as they are:**
 

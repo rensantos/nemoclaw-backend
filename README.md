@@ -526,6 +526,36 @@ Log: /home/renatobox/ubi-a4000/logs/backend.log
 python -m unittest discover -s tests
 ```
 
+## Reasoning Models
+
+`content` is always the assistant's answer only. When a reasoning model
+produces hidden thinking, it is separated into a `reasoning` field:
+
+```json
+{
+  "message": {
+    "role": "assistant",
+    "content": "Lisbon",
+    "reasoning": "Hmm, the user wants one word. Lisbon has been the capital..."
+  }
+}
+```
+
+`reasoning` is omitted entirely when the model did no thinking, so
+non-reasoning models (`llama3.2`, `gemma3`, `mistral`) are unaffected and no
+per-model configuration is needed. An OpenAI-compatible client that reads
+only `content` shows a clean answer; a frontend that wants a "show thinking"
+toggle has the text available.
+
+This handles two different upstream behaviours: Ollama supplies a separate
+`message.thinking` for well-behaved models, while some chat templates leak
+thinking into the content ending with a `</think>` marker. `qwen3:30b` does
+the latter *and* ignores `"think": false`, so this is the only way to get
+clean output from it.
+
+Note that disabling reasoning can cost accuracy: `qwen3:1.7b` answers
+"Lisbon" with thinking on and "Porto" with it off.
+
 ## Model Discovery
 
 `GET /v1/models` lists every model a caller may select - the

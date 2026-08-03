@@ -65,6 +65,13 @@ def chat_completions(req: ChatCompletionRequest):
     except (EngineUnavailableError, LifecycleUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
+    message = {"role": "assistant", "content": result["content"]}
+    # Nemoclaw extension: a reasoning model's hidden thinking, kept out of
+    # "content" so OpenAI clients render only the answer. Omitted entirely
+    # when the model did no reasoning.
+    if result.get("reasoning"):
+        message["reasoning"] = result["reasoning"]
+
     return {
         "id": "chatcmpl-{}".format(uuid.uuid4().hex),
         "object": "chat.completion",
@@ -73,10 +80,7 @@ def chat_completions(req: ChatCompletionRequest):
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": result["content"],
-                },
+                "message": message,
                 "finish_reason": "stop",
             }
         ],
