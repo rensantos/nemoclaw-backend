@@ -745,5 +745,83 @@ class GPUAvailabilityReportTests(unittest.TestCase):
         self.assertIn("GPU 2 ('RTX A4000'): free", printed)
 
 
+class GPUPinFreeTests(unittest.TestCase):
+    def _gpu(self, index, used=3, total=16117):
+        return GPUInfo(
+            index=index, name="RTX A4000", memory_total_mib=total,
+            memory_used_mib=used, memory_free_mib=total - used,
+            temperature_c=45, utilization_percent=0, driver_version="470.86",
+        )
+
+    def _run(self, selection, required=25805, pids=(23825,), engine="ollama", **kwargs):
+        availability = cli.GPUAvailability(in_use=[], free=[self._gpu("0")], ours=[])
+        output = io.StringIO()
+        with mock.patch.object(cli, "config", _config_with_engine(engine)), \
+                mock.patch("engines.ollama_engine.find_daemon_pids", return_value=list(pids)), \
+                mock.patch.object(cli, "_own_gpu_pids", return_value=[]), \
+                mock.patch.object(cli, "_estimated_model_vram_mib", return_value=required), \
+                mock.patch.object(cli.gpu_manager, "availability", return_value=availability), \
+                mock.patch.object(cli.gpu_manager, "detect_gpus", return_value=[self._gpu(str(i)) for i in range(4)]), \
+                mock.patch.object(cli.gpu_manager, "select_gpus_for", return_value=selection), \
+                mock.patch("engines.ollama_engine.restart_daemon_pinned", return_value=99999) as restart, \
+                redirect_stdout(output):
+            try:
+                cli.gpu_pin_free(**kwargs)
+                code = 0
+            except cli.typer.Exit as exc:
+                code = exc.code
+        return code, output.getvalue(), restart
+
+    def test_restarts_pinned_to_the_selected_gpus(self):
+        selection = [self._gpu("0"), self._gpu("1")]
+        code, printed, restart = self._run(selection, yes=True, dry_run=False)
+
+        self.assertEqual(code, 0)
+        restart.assert_called_once_with(23825, ["0", "1"])
+        self.assertIn("Selected GPU 0,1", printed)
+        self.assertIn("2 of 4 card(s)", printed)
+
+    def test_refuses_when_free_gpus_cannot_hold_the_model(self):
+        code, printed, restart = self._run(None, yes=True, dry_run=False)
+
+        self.assertEqual(code, 1)
+        restart.assert_not_called()
+        self.assertIn("Refusing", printed)
+
+    def test_dry_run_leaves_the_daemon_alone(self):
+        selection = [self._gpu("0")]
+        code, printed, restart = self._run(selection, yes=True, dry_run=True)
+
+        restart.assert_not_called()
+        self.assertIn("Dry run", printed)
+
+    def test_declining_confirmation_does_not_restart(self):
+        selection = [self._gpu("0")]
+        with mock.patch.object(cli.typer, "confirm", return_value=False):
+            code, printed, restart = self._run(selection, yes=False, dry_run=False)
+
+        self.assertEqual(code, 1)
+        restart.assert_not_called()
+        self.assertIn("Not restarting", printed)
+
+    def test_rejected_for_non_ollama_engines(self):
+        code, printed, restart = self._run(
+            [self._gpu("0")], engine="transformers", yes=True, dry_run=False
+        )
+
+        self.assertEqual(code, 1)
+        restart.assert_not_called()
+        self.assertIn("Ollama daemon only", printed)
+
+    def test_reports_when_no_daemon_is_running(self):
+        code, printed, restart = self._run(
+            [self._gpu("0")], pids=(), yes=True, dry_run=False
+        )
+
+        self.assertEqual(code, 1)
+        restart.assert_not_called()
+        self.assertIn("No local Ollama daemon", printed)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -517,3 +517,84 @@ class GPUProcessQueryTests(unittest.TestCase):
         manager = GPUManager(FakeConfig())
         with mock.patch.object(manager, "_nvidia_smi", return_value=[]):
             self.assertEqual(manager.gpu_processes(), [])
+
+
+class GPUSelectionTests(unittest.TestCase):
+    """Pick the fewest free GPUs that fit, lowest index first. No pairing
+    rule - one, two, three or four, in any combination."""
+
+    def _manager(self, gpus, processes=()):
+        manager = GPUManager(FakeConfig())
+        return manager, mock.patch.object(
+            manager, "detect_gpus", return_value=gpus
+        ), mock.patch.object(manager, "gpu_processes", return_value=list(processes))
+
+    def test_uses_a_single_gpu_when_one_is_enough(self):
+        gpus = [_gpu("0"), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect, procs = self._manager(gpus)
+
+        with detect, procs:
+            selection = manager.select_gpus_for(8000)
+
+        self.assertEqual([g.index for g in selection], ["0"])
+
+    def test_grows_to_exactly_as_many_gpus_as_needed(self):
+        gpus = [_gpu("0"), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect, procs = self._manager(gpus)
+
+        with detect, procs:
+            # ~25.2 GiB across 16 GiB cards -> two, not four.
+            selection = manager.select_gpus_for(25805)
+
+        self.assertEqual([g.index for g in selection], ["0", "1"])
+
+    def test_can_select_three_gpus(self):
+        gpus = [_gpu("0"), _gpu("1"), _gpu("2"), _gpu("3")]
+        manager, detect, procs = self._manager(gpus)
+
+        with detect, procs:
+            selection = manager.select_gpus_for(40000)
+
+        self.assertEqual([g.index for g in selection], ["0", "1", "2"])
+
+    def test_starts_from_the_lowest_free_index_skipping_busy_ones(self):
+        """GPU 0/1 taken by someone else -> start at 2, not 0."""
+        gpus = [_gpu("0", used=6658, util=80), _gpu("1", used=6658, util=87),
+                _gpu("2"), _gpu("3")]
+        processes = [_proc("0", 16423, name="python"),
+                     _proc("1", 16675, name="python")]
+        manager, detect, procs = self._manager(gpus, processes)
+
+        with detect, procs:
+            selection = manager.select_gpus_for(25805)
+
+        self.assertEqual([g.index for g in selection], ["2", "3"])
+
+    def test_refuses_when_free_gpus_cannot_hold_the_model(self):
+        gpus = [_gpu("0", used=6658, util=80), _gpu("1", used=6658, util=87),
+                _gpu("2"), _gpu("3")]
+        processes = [_proc("0", 16423, name="python"),
+                     _proc("1", 16675, name="python")]
+        manager, detect, procs = self._manager(gpus, processes)
+
+        with detect, procs:
+            # More than the two free cards can hold.
+            self.assertIsNone(manager.select_gpus_for(60000))
+
+    def test_counts_a_card_holding_only_our_model_at_full_capacity(self):
+        """Restarting the runtime frees it, so it offers its whole size,
+        not just what is free while our model sits on it."""
+        gpus = [_gpu("0", used=15000), _gpu("1")]
+        manager, detect, procs = self._manager(gpus, [_proc("0", 17181)])
+
+        with detect, procs:
+            selection = manager.select_gpus_for(15000, own_pids=[17181])
+
+        self.assertEqual([g.index for g in selection], ["0"])
+
+    def test_returns_none_when_no_gpu_is_usable(self):
+        gpus = [_gpu("0", used=9000)]
+        manager, detect, procs = self._manager(gpus, [_proc("0", 16423, name="x")])
+
+        with detect, procs:
+            self.assertIsNone(manager.select_gpus_for(1000))

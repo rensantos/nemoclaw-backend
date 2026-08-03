@@ -128,6 +128,43 @@ class GPUManager:
             return True
         return False
 
+    def select_gpus_for(
+        self,
+        required_mib: int,
+        own_pids=None,
+        reserve_mib: int = 512,
+    ) -> Optional[List[GPUInfo]]:
+        """Fewest GPUs that can hold required_mib, lowest index first.
+
+        Only cards nobody else is using are considered - a GPU holding
+        just our own model counts, since restarting the runtime releases
+        it. There is no pairing rule: the answer may be one, two, three or
+        four cards, whichever combination is smallest.
+
+        Lowest-index-first makes the choice deterministic and keeps the
+        higher indexes contiguous for the next person. Returns None when
+        even every usable GPU together is not enough, so the caller can
+        refuse rather than half-place a model.
+        """
+        availability = self.availability(own_pids=own_pids)
+        candidates = sorted(availability.usable, key=lambda gpu: int(gpu.index))
+
+        selected, capacity = [], 0
+        for gpu in candidates:
+            selected.append(gpu)
+            capacity += max(self._reclaimable_mib(gpu, availability) - reserve_mib, 0)
+            if capacity >= required_mib:
+                return selected
+        return None
+
+    def _reclaimable_mib(self, gpu: GPUInfo, availability: GPUAvailability) -> int:
+        """Memory we could actually use on this card. A card holding only
+        our own model gives back its full capacity once that model is
+        evicted; a genuinely free card offers whatever is free now."""
+        if any(str(other.index) == str(gpu.index) for other in availability.ours):
+            return gpu.memory_total_mib or 0
+        return gpu.memory_free_mib or 0
+
     def gpu_processes(self) -> List[GPUProcess]:
         """Per-process GPU memory attribution from nvidia-smi.
 

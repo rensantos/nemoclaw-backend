@@ -564,3 +564,152 @@ class OllamaDaemonDiscoveryTests(unittest.TestCase):
             ollama_engine, "find_runtime_pids", return_value=[1, 2]
         ):
             self.assertEqual(engine.runtime_pids(), [1, 2])
+
+
+class OllamaVRAMEstimationTests(unittest.TestCase):
+    def _engine(self, model_id="qwen3:30b"):
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(_make_config("ollama", model_id=model_id))
+
+    def _tags(self, payload):
+        return mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _fake_urlopen_response(payload),
+        )
+
+    def test_reads_disk_size_for_the_configured_tag(self):
+        engine = self._engine()
+        payload = {"models": [
+            {"name": "qwen3:30b", "size": 18556699314},
+            {"name": "other:1b", "size": 1000},
+        ]}
+
+        with self._tags(payload):
+            self.assertEqual(engine.model_disk_size_mib(), 17697)
+
+    def test_estimate_scales_disk_size_by_the_overhead_factor(self):
+        from engines.ollama_engine import VRAM_OVERHEAD_FACTOR
+
+        engine = self._engine()
+        payload = {"models": [{"name": "qwen3:30b", "size": 18556699314}]}
+
+        with self._tags(payload):
+            estimate = engine.estimated_vram_mib()
+
+        self.assertEqual(estimate, int(17697 * VRAM_OVERHEAD_FACTOR))
+        # Must cover what Ollama actually reported on UBI (25.2 GiB).
+        self.assertGreaterEqual(estimate, int(25.2 * 1024))
+
+    def test_returns_none_for_an_unknown_tag(self):
+        engine = self._engine()
+        with self._tags({"models": [{"name": "other:1b", "size": 1000}]}):
+            self.assertIsNone(engine.model_disk_size_mib())
+            self.assertIsNone(engine.estimated_vram_mib())
+
+
+class OllamaDaemonRestartTests(unittest.TestCase):
+    def test_launch_spec_reads_argv_and_env_from_proc(self):
+        from engines import ollama_engine
+
+        contents = {
+            "/proc/23825/cmdline": b"./bin/ollama\0serve\0",
+            "/proc/23825/environ": b"CUDA_VISIBLE_DEVICES=0,1,2,3\0OLLAMA_HOST=127.0.0.1:11434\0",
+        }
+
+        def fake_open(path, *args, **kwargs):
+            return mock.mock_open(read_data=contents[str(path)])()
+
+        with mock.patch("builtins.open", side_effect=fake_open):
+            argv, env = ollama_engine.daemon_launch_spec(23825)
+
+        self.assertEqual(argv, ["./bin/ollama", "serve"])
+        self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "0,1,2,3")
+        self.assertEqual(env["OLLAMA_HOST"], "127.0.0.1:11434")
+
+    def test_launch_spec_returns_none_when_unreadable(self):
+        from engines import ollama_engine
+
+        with mock.patch("builtins.open", side_effect=OSError):
+            self.assertIsNone(ollama_engine.daemon_launch_spec(23825))
+
+    def test_restart_overrides_only_cuda_visible_devices(self):
+        from engines import ollama_engine
+
+        spec = (["./bin/ollama", "serve"], {
+            "CUDA_VISIBLE_DEVICES": "0,1,2,3",
+            "OLLAMA_MODELS": "/home/d3894/ollama/models",
+            "PWD": "/home/d3894/ollama",
+        })
+
+        with mock.patch.object(ollama_engine, "daemon_launch_spec", return_value=spec), \
+                mock.patch.object(ollama_engine.os, "kill", side_effect=[None, OSError]), \
+                mock.patch.object(ollama_engine.time, "sleep"), \
+                mock.patch.object(ollama_engine.subprocess, "Popen") as popen:
+            popen.return_value = types.SimpleNamespace(pid=99999)
+            new_pid = ollama_engine.restart_daemon_pinned(23825, ["2", "3"])
+
+        self.assertEqual(new_pid, 99999)
+        _, kwargs = popen.call_args
+        self.assertEqual(kwargs["env"]["CUDA_VISIBLE_DEVICES"], "2,3")
+        # Everything else about how it was launched is preserved.
+        self.assertEqual(kwargs["env"]["OLLAMA_MODELS"], "/home/d3894/ollama/models")
+        self.assertEqual(kwargs["cwd"], "/home/d3894/ollama")
+
+    def test_restart_refuses_when_launch_command_is_unknown(self):
+        from engines import ollama_engine
+
+        with mock.patch.object(ollama_engine, "daemon_launch_spec", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "refusing to restart it blind"):
+                ollama_engine.restart_daemon_pinned(23825, ["2"])
+
+    def test_restart_gives_up_if_the_daemon_will_not_exit(self):
+        from engines import ollama_engine
+
+        spec = (["./bin/ollama", "serve"], {})
+        with mock.patch.object(ollama_engine, "daemon_launch_spec", return_value=spec), \
+                mock.patch.object(ollama_engine.os, "kill", return_value=None), \
+                mock.patch.object(ollama_engine.time, "sleep"), \
+                mock.patch.object(ollama_engine.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "did not exit after SIGTERM"):
+                ollama_engine.restart_daemon_pinned(23825, ["2"])
+
+        popen.assert_not_called()
+
+    def test_inherits_the_daemons_existing_log_destination(self):
+        """Shell redirection means the log path is in neither argv nor
+        environ; without reading fd/1 a restart silently loses serve.log."""
+        from engines import ollama_engine
+
+        spec = (["./bin/ollama", "serve"], {})
+        opened = {}
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            opened["path"] = path
+            return mock.mock_open()()
+
+        with mock.patch.object(ollama_engine, "daemon_launch_spec", return_value=spec), \
+                mock.patch.object(
+                    ollama_engine.os, "readlink",
+                    return_value="/home/d3894/ollama/serve.log",
+                ), \
+                mock.patch.object(ollama_engine.os, "kill", side_effect=[None, OSError]), \
+                mock.patch.object(ollama_engine.time, "sleep"), \
+                mock.patch("builtins.open", side_effect=fake_open), \
+                mock.patch.object(ollama_engine.subprocess, "Popen") as popen:
+            popen.return_value = types.SimpleNamespace(pid=99999)
+            ollama_engine.restart_daemon_pinned(23825, ["2", "3"])
+
+        self.assertEqual(opened["path"], "/home/d3894/ollama/serve.log")
+
+    def test_ignores_a_dev_null_log_destination(self):
+        from engines import ollama_engine
+
+        with mock.patch.object(ollama_engine.os, "readlink", return_value="/dev/null"):
+            self.assertIsNone(ollama_engine.daemon_log_path(23825))
+
+    def test_log_path_none_when_fd_unreadable(self):
+        from engines import ollama_engine
+
+        with mock.patch.object(ollama_engine.os, "readlink", side_effect=OSError):
+            self.assertIsNone(ollama_engine.daemon_log_path(23825))

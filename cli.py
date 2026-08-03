@@ -1043,6 +1043,109 @@ def gpu_list():
     _print_gpu_availability()
 
 
+@gpu_app.command("pin-free")
+def gpu_pin_free(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show the decision without restarting anything."
+    ),
+):
+    """Restart the Ollama daemon pinned to the GPUs that are free now.
+
+    Ollama splits a model across every GPU it can see once one card isn't
+    enough, so on a shared box it takes a slice of cards other people
+    could otherwise have had to themselves. CUDA_VISIBLE_DEVICES is the
+    only lever, and it can only be set at daemon start - hence a restart.
+
+    Chosen fresh each run rather than pinned in config: which GPUs are
+    free changes, and a static pin would fail exactly when the configured
+    cards are taken and others are idle.
+    """
+    if config.backend.engine != "ollama":
+        typer.echo(
+            "backend.engine is '{}'; GPU pinning applies to the Ollama "
+            "daemon only.".format(config.backend.engine)
+        )
+        raise typer.Exit(code=1)
+
+    from engines.ollama_engine import find_daemon_pids, restart_daemon_pinned
+
+    pids = find_daemon_pids()
+    if not pids:
+        typer.echo("No local Ollama daemon found; nothing to pin.")
+        raise typer.Exit(code=1)
+
+    _print_gpu_availability()
+
+    required_mib = _estimated_model_vram_mib()
+    if required_mib is None:
+        typer.echo(
+            "Cannot determine the VRAM needed for '{}' (is the tag pulled "
+            "and the daemon reachable?).".format(config.model.id)
+        )
+        raise typer.Exit(code=1)
+
+    selection = gpu_manager.select_gpus_for(required_mib, own_pids=_own_gpu_pids())
+    typer.echo(
+        "Model {} needs ~{} (estimated from its on-disk size).".format(
+            config.model.id, _mib(required_mib)
+        )
+    )
+
+    if selection is None:
+        typer.echo(
+            "Refusing: the GPUs that are free right now cannot hold it. "
+            "Wait for a GPU to free up, or configure a smaller model."
+        )
+        raise typer.Exit(code=1)
+
+    indexes = [str(gpu.index) for gpu in selection]
+    typer.echo(
+        "Selected GPU {} ({} of {} card(s), lowest index first).".format(
+            ",".join(indexes), len(indexes), len(gpu_manager.detect_gpus())
+        )
+    )
+    for gpu in selection:
+        typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
+
+    if dry_run:
+        typer.echo("Dry run: daemon left untouched.")
+        return
+
+    typer.echo(
+        "Restarting the Ollama daemon drops any resident model (it "
+        "reloads on the next request) and briefly interrupts inference."
+    )
+    if not yes and not typer.confirm(
+        "Restart Ollama daemon PID {} pinned to GPU {}?".format(
+            pids[0], ",".join(indexes)
+        )
+    ):
+        typer.echo("Not restarting.")
+        raise typer.Exit(code=1)
+
+    try:
+        new_pid = restart_daemon_pinned(pids[0], indexes)
+    except (OSError, RuntimeError) as exc:
+        typer.echo("Failed to restart the daemon: {}".format(exc))
+        raise typer.Exit(code=1)
+
+    typer.echo("Ollama daemon restarted as PID {} on GPU {}".format(new_pid, ",".join(indexes)))
+    typer.echo(
+        "Note: this is not persistent. A daemon restart or reboot returns "
+        "to whatever its startup command sets."
+    )
+
+
+def _estimated_model_vram_mib():
+    from engines.ollama_engine import OllamaEngine
+
+    try:
+        return OllamaEngine(config).estimated_vram_mib()
+    except Exception:
+        return None
+
+
 @gpu_app.command("current")
 def gpu_current():
     """Show the configured backend GPU and current CUDA state."""

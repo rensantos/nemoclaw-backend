@@ -166,6 +166,7 @@ Use the Python CLI for normal operations:
 ./backend gpu list
 ./backend gpu current
 ./backend gpu monitor
+./backend gpu pin-free
 ./backend benchmark latency
 ./backend benchmark throughput
 ./backend benchmark vram
@@ -322,6 +323,35 @@ assumes a fixed "safe" pair.
 
 `backend gpu monitor` refreshes utilization, VRAM usage, and temperature until
 Ctrl+C.
+
+`backend gpu pin-free` restarts the Ollama daemon so it can only see the GPUs
+that are free right now:
+
+```bash
+./backend gpu pin-free --dry-run   # show the decision, change nothing
+./backend gpu pin-free             # asks before restarting
+./backend gpu pin-free --yes       # no prompt
+```
+
+Ollama splits a model across *every* GPU it can see once one card isn't
+enough - it does not try to use the fewest. On UBI, `qwen3:30b` needs
+~25.2 GiB, which fits in two 16 GiB cards, but it loaded across all four
+(`layers.split=13,12,12,12`), taking ~6 GB from each - including cards
+another user was already on. There is no "use fewest GPUs" setting in
+Ollama; `CUDA_VISIBLE_DEVICES` is the only lever, and it applies only at
+daemon start, hence the restart.
+
+The command picks the **fewest** free GPUs that fit, **lowest index first** -
+one, two, three or four, whatever is needed. If the free GPUs can't hold the
+model it refuses and reports, rather than placing it partially. The VRAM
+requirement is estimated from the model's on-disk size (Ollama only reports
+the true figure after loading), rounded up so that erring means one extra
+card rather than a model spilling to CPU.
+
+This is deliberately **not** persistent and **not** automatic: which GPUs are
+free changes, so a static pin in config would fail exactly when the configured
+cards are busy and others are idle. Re-run it when the picture changes; a
+daemon restart or reboot returns to whatever its startup command sets.
 
 This phase does not implement GPU selection, multi-GPU scheduling, MIG, CUDA
 affinity, or dashboards. Benchmark commands are provided separately by

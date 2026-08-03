@@ -19,6 +19,7 @@ daemon owns the CUDA context; model_id is mutable from that point on.
 import json
 import logging
 import os
+import signal
 import subprocess
 import time
 import urllib.error
@@ -41,6 +42,10 @@ _TAGS_TIMEOUT_SECONDS = 5
 # is deferred (docs/ollama-engine-design.md Section 7, "Timeout behavior" -
 # resolved here for Increment 3 as a fixed value, not full configurability).
 _GENERATE_TIMEOUT_SECONDS = 120
+
+# Multiplier from a tag's on-disk size to the VRAM Ollama actually needs
+# to serve it fully on GPU. See OllamaEngine.estimated_vram_mib().
+VRAM_OVERHEAD_FACTOR = 1.5
 
 _logger = logging.getLogger(__name__)
 
@@ -119,6 +124,113 @@ def _children_by_parent():
     return children
 
 
+def daemon_launch_spec(pid: int):
+    """Reconstructs how a running daemon was launched, so it can be
+    restarted with a different CUDA_VISIBLE_DEVICES.
+
+    Reads argv and environment from /proc rather than assuming the
+    documented command line - the deployed daemon has drifted from the
+    docs before. Returns (argv, env) or None if either is unreadable.
+    """
+    try:
+        with open("/proc/{}/cmdline".format(pid), "rb") as cmdline_file:
+            argv = [
+                part.decode("utf-8", "replace")
+                for part in cmdline_file.read().split(b"\0")
+                if part
+            ]
+        with open("/proc/{}/environ".format(pid), "rb") as environ_file:
+            raw_env = environ_file.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+
+    if not argv:
+        return None
+
+    env = {}
+    for entry in raw_env.split("\0"):
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            env[key] = value
+    return argv, env
+
+
+def daemon_log_path(pid: int) -> Optional[str]:
+    """Where a running daemon's stdout goes, from /proc/<pid>/fd/1.
+
+    The log destination comes from shell redirection at launch, so it is
+    in neither argv nor the environment - without this a restart would
+    silently send the daemon's output to /dev/null and lose serve.log.
+    """
+    try:
+        target = os.readlink("/proc/{}/fd/1".format(pid))
+    except OSError:
+        return None
+    if not target.startswith("/") or target.startswith("/dev/") or "(deleted)" in target:
+        return None
+    return target
+
+
+def restart_daemon_pinned(pid: int, gpu_indexes, log_path=None):
+    """Stops the daemon at `pid` and relaunches it seeing only
+    gpu_indexes.
+
+    CUDA_VISIBLE_DEVICES can only be set at process start, so pinning
+    means a restart. This is the one place the backend touches the
+    daemon's lifecycle, and only when an operator explicitly asks
+    (./backend gpu pin-free). Any resident model is dropped and reloaded
+    on the next request.
+
+    Terminates by PID, never `pkill -f`: that pattern was confirmed to
+    kill the calling SSH session too (docs/ollama-on-ubi-design.md).
+    """
+    spec = daemon_launch_spec(pid)
+    if spec is None:
+        raise RuntimeError(
+            "Cannot read the launch command of Ollama daemon PID {}; "
+            "refusing to restart it blind.".format(pid)
+        )
+
+    argv, env = spec
+    env = dict(env)
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(str(index) for index in gpu_indexes)
+
+    # Keep writing wherever it was already writing; discarding the
+    # daemon's log on restart would lose the only record of its
+    # scheduling decisions.
+    if log_path is None:
+        log_path = daemon_log_path(pid)
+
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):
+        time.sleep(0.2)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+    else:
+        raise RuntimeError(
+            "Ollama daemon PID {} did not exit after SIGTERM; leaving it "
+            "alone rather than forcing a kill.".format(pid)
+        )
+
+    log_target = open(log_path, "ab") if log_path else subprocess.DEVNULL
+    try:
+        process = subprocess.Popen(
+            argv,
+            env=env,
+            stdout=log_target,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=env.get("PWD") or None,
+        )
+    finally:
+        if log_path:
+            log_target.close()
+    return process.pid
+
+
 def _is_ollama_executable(pid: int) -> bool:
     """Whether pid is the ollama binary itself, not a shell that merely
     mentions it. `pgrep -f "ollama serve"` also matches the `bash -c ...`
@@ -152,6 +264,32 @@ class OllamaEngine(InferenceEngine):
         """The daemon and its model-runner children (see
         find_runtime_pids); their VRAM is ours and reclaimable."""
         return find_runtime_pids()
+
+    def model_disk_size_mib(self, model_id: Optional[str] = None) -> Optional[int]:
+        """On-disk size of a tag from GET /api/tags, or None if unknown."""
+        target = self.model_id if model_id is None else model_id
+        for model in self._get_tags().get("models") or []:
+            if isinstance(model, dict) and model.get("name") == target:
+                size = model.get("size")
+                if isinstance(size, (int, float)):
+                    return int(size / (1024 * 1024))
+        return None
+
+    def estimated_vram_mib(self, model_id: Optional[str] = None) -> Optional[int]:
+        """Rough VRAM needed to serve a tag fully on GPU.
+
+        Ollama only reports the true figure (memory.required.full) after
+        it has loaded the model, so this scales the on-disk weight size by
+        VRAM_OVERHEAD_FACTOR. Measured on UBI: qwen3:30b is 17.28 GiB on
+        disk and Ollama reported 25.2 GiB required - a 1.46x ratio, driven
+        by the KV cache, compute graph and parallel request slots. The
+        default rounds that up, because over-estimating costs one extra
+        GPU while under-estimating spills a model onto CPU or fails.
+        """
+        disk_mib = self.model_disk_size_mib(model_id)
+        if disk_mib is None:
+            return None
+        return int(disk_mib * VRAM_OVERHEAD_FACTOR)
 
     def load_model(self, model_id: Optional[str] = None) -> None:
         """Validates the target tag is present locally. Never pulls."""

@@ -781,6 +781,54 @@ all four GPUs the census read "4 held by our own model (reclaimable)" and
 `./backend start` proceeded; with GPU 0/1 simulated as another user's and
 GPU 2/3 holding our model, only 0/1 were flagged.
 
+Dynamic GPU pinning, `./backend gpu pin-free` (2026-08-03): Ollama's
+scheduler splits a model across **every** GPU it can see once one card
+isn't enough - it does not try to use the fewest. Measured on UBI:
+`qwen3:30b` needs 25.2 GiB (weights 17.1 GiB + KV 0.75 + graph 1.0,
+`parallel=2`), which fits in two 15.6 GiB cards, yet it loaded with
+`layers.split=13,12,12,12`, taking ~6GB from all four. Worse, an earlier
+log line shows `memory.available="[15.6 15.6 9.1 9.1]"` - it took a slice
+of cards another user was already on. `OLLAMA_SCHED_SPREAD` only forces
+*more* spreading; v0.9.2 has no "use fewest" setting, so
+`CUDA_VISIBLE_DEVICES` is the only lever and it can only be set at daemon
+start.
+
+Static pinning was rejected by the user for a good reason: it is fragile
+on a shared box - a daemon pinned to `2,3` fails to load when someone
+else takes 2/3 even though 0/1 are idle. So the selection is made
+**fresh at run time**:
+
+- `GPUManager.select_gpus_for(required_mib, own_pids)` returns the
+  **fewest** usable GPUs that fit, **lowest index first**. No pairing
+  rule - one, two, three or four, any combination. Cards holding only our
+  own model count at full capacity, since restarting releases them.
+  Returns `None` when even all free cards are not enough, so the caller
+  refuses rather than half-placing a model.
+- `OllamaEngine.estimated_vram_mib()` scales the tag's on-disk size by
+  `VRAM_OVERHEAD_FACTOR` (1.5). Ollama only reports the true figure after
+  loading, so this is an estimate; 1.5 is rounded up from the measured
+  25.2/17.28 = 1.46, because over-estimating costs one extra GPU while
+  under-estimating spills to CPU or fails.
+- `restart_daemon_pinned()` reconstructs the launch command from
+  `/proc/<pid>/cmdline` + `environ` (not from the docs - the deployed
+  daemon has drifted before), overrides only `CUDA_VISIBLE_DEVICES`, and
+  terminates by PID, never `pkill -f`. This is the **one** place the
+  backend touches the daemon's lifecycle, and only on explicit operator
+  command.
+- **Caught during live testing:** the first implementation sent the
+  restarted daemon's output to `DEVNULL`, silently losing `serve.log` -
+  the log path comes from shell redirection at launch, so it is in
+  neither argv nor environ. `daemon_log_path()` now reads
+  `/proc/<pid>/fd/1` and the restart inherits it.
+
+Live-verified end to end on UBI: before, `layers.split=13,12,12,12` over
+four cards; after `./backend gpu pin-free`, `layers.split=25,24` with
+`memory.available="[15.6 GiB 15.6 GiB]"`, GPU 2/3 left at 3 MiB and
+genuinely free for someone else. Log destination preserved across the
+restart. **Not persistent by design** - a daemon restart or reboot
+returns to whatever the `@reboot` crontab sets, and the command is
+re-run when the free set changes.
+
 **Operator decisions taken 2026-08-02, deliberately leaving two things
 as they are:**
 
@@ -819,6 +867,7 @@ Run real CLI commands inside the `llm` Conda environment:
 ./backend model local   # what's actually cached on disk (TransformersEngine only)
 ./backend model load|unload|switch <model_id>   # stubs: 501 not implemented
 ./backend gpu list|current|monitor
+./backend gpu pin-free   # restart Ollama pinned to the GPUs free right now
 ./backend benchmark latency|throughput|vram|first-token-latency
 ```
 
