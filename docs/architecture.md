@@ -166,6 +166,30 @@ rationale: admin operations are unstable and evolving, and grouping them
 under `/admin/` keeps that instability clearly separated from the stable,
 OpenAI-compatible `/v1/*` surface.
 
+## GPU Safety
+
+`services/gpu_safety.py` decides whether it is safe to start serving:
+`GPUManager` reports what the GPUs *are*, `GPUSafetyService` decides what
+to *do* about it, and the CLI renders the resulting `StartDecision`
+(`proceed`/`confirm`/`refuse`) without computing any of it. This keeps
+`cli.py` a delivery surface, as the Architecture Rules require, and makes
+the policy testable without capturing stdout.
+
+Two rules are encoded, both learned from live use on a shared box:
+
+- Our own model's VRAM never counts against us. It is reclaimable, and
+  treating it as another user's job made the backend refuse to start
+  because of the model it was itself serving.
+- An external model runtime (the Ollama daemon) places models using the
+  devices *it* was launched with, which `backend.gpu` does not constrain.
+  Refusing whenever it can merely *reach* a busy GPU would block almost
+  every start on a shared machine and make `--force` routine, so the
+  service warns while any safe placement remains and refuses only when
+  none does.
+
+Engine-specific process lookup sits behind `OllamaRuntimeInspector`, so
+the policy itself knows nothing about Ollama.
+
 ## Inference Service
 
 `services/inference.py` contains `InferenceService`, the application boundary

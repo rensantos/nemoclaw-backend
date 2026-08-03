@@ -1015,13 +1015,38 @@ to `implemented`; **no endpoint is `partial` any more**.
   marker, so trimming only the marker's own chunk leaked a leading
   newline into `content`.
 
-Next milestones (recommended order in `docs/audit-87a844d.md`): rewire
-`BenchmarkService.first_token_latency`, which has honestly reported itself
-unavailable all along and is now finally measurable. Then the API test
-seam (`api.py` builds its service at import, so route tests still assert
-on *source text*; needs dependency injection plus `httpx`), then
-extracting GPU policy out of `cli.py` (1381 lines, holding real
-warn/refuse decisions that belong to `GPUManager`).
+The rest of `docs/audit-87a844d.md`'s recommended order is now done too:
+
+- **`first_token_latency` measures for real** over an SSE stream. Reasoning
+  deltas are excluded from the metric - for a reasoning model the first
+  thing on the wire is hidden thinking, so timing that would flatter the
+  number while saying nothing about when the user sees an answer. Live on
+  UBI: first reasoning token ~3.4s, first *answer* token 3.5-11.2s. A
+  stream that emits only reasoning is reported unavailable rather than
+  counted as zero, keeping the never-fake-a-number property.
+- **API tests are behavioural.** `api.py` now exposes its service through
+  a FastAPI dependency built on first use (plus `set_inference_service()`
+  as a test seam), so importing the module no longer loads a model;
+  `app.py` triggers construction in a startup hook so the server still
+  loads up front and the GPU busy-check still runs before anything is
+  loaded. `tests/test_api.py` replaces the source-text greps with 21 real
+  request tests. Added `httpx` (test-only, required by starlette's
+  TestClient). One source-level assertion is kept deliberately - that
+  `api.py` never imports Transformers or torch, an architectural
+  constraint rather than a behaviour.
+- **GPU policy left `cli.py`.** New `services/gpu_safety.py`:
+  `GPUSafetyService.evaluate_start()` returns a `StartDecision`
+  (`proceed`/`confirm`/`refuse`) and the CLI only renders it.
+  Engine-specific process lookup sits behind `OllamaRuntimeInspector`, so
+  the policy knows nothing about Ollama. Behaviour is unchanged,
+  re-verified live; `cli.py` is no longer computing decisions it should
+  only be formatting.
+
+Next milestones: nothing from the audit remains. Still open by earlier
+explicit decision, not oversight: Phase 5 worker supervision (which would
+unlock `TransformersEngine` lifecycle and side-by-side switching), the
+Backend Registry, the UBI OS/driver upgrade, and persistently pinning the
+Ollama daemon's GPUs.
 
 Also open: Phase 5 worker supervision (the deferred half of
 `docs/model-lifecycle-design.md`'s Minimal Implementation Plan, steps 7-8)
