@@ -524,8 +524,27 @@ def _print_benchmark_result(result, json_output: bool) -> None:
         _print_vram_snapshot("Peak", result.get("vram_peak", {}))
         _print_vram_snapshot("After", result.get("vram_after", {}))
     elif result["benchmark"] == "first-token-latency":
-        typer.echo("Available: {}".format("yes" if result.get("available") else "no"))
-        typer.echo("Message: {}".format(result.get("message")))
+        if not result.get("available"):
+            typer.echo("Available: no")
+            typer.echo("Message: {}".format(result.get("message")))
+        else:
+            typer.echo("Average first token: {}".format(
+                _seconds(result.get("average_seconds"))
+            ))
+            typer.echo("Min: {}".format(_seconds(result.get("min_seconds"))))
+            typer.echo("Max: {}".format(_seconds(result.get("max_seconds"))))
+            reasoning = [
+                run.get("first_reasoning_seconds")
+                for run in result.get("results", [])
+                if run.get("first_reasoning_seconds") is not None
+            ]
+            if reasoning:
+                # Reasoning arrives first for a thinking model; showing it
+                # separately makes clear why the answer took as long as it did.
+                typer.echo(
+                    "First reasoning token: {} average (excluded from the "
+                    "metric)".format(_seconds(sum(reasoning) / len(reasoning)))
+                )
 
 
 @app.callback(invoke_without_command=True)
@@ -1345,7 +1364,7 @@ def benchmark_first_token_latency(
     ),
     json_output: bool = typer.Option(False, "--json", help="Print structured JSON."),
 ):
-    """Report first-token latency support status."""
+    """Measure time to the first answer token over a real stream."""
     try:
         result = benchmark_service.first_token_latency(prompt, max_tokens, runs, concurrency)
     except (BenchmarkError, ValueError) as exc:

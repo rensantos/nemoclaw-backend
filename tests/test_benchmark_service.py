@@ -1,8 +1,10 @@
+import io
+import json
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from services.benchmark import BenchmarkService
+from services.benchmark import BenchmarkError, BenchmarkService
 from services.gpu import GPUInfo
 
 
@@ -109,15 +111,6 @@ class BenchmarkServiceTests(unittest.TestCase):
         self.assertEqual(result["vram_peak"]["memory_used_mib"], 1400)
         self.assertEqual(result["vram_after"]["memory_used_mib"], 1200)
 
-    def test_first_token_latency_is_unavailable_without_streaming(self):
-        service = FakeBenchmarkService([])
-
-        result = service.first_token_latency("hello", max_tokens=8)
-
-        self.assertEqual(result["benchmark"], "first-token-latency")
-        self.assertFalse(result["available"])
-        self.assertIn("streaming is not implemented", result["message"])
-
     def test_concurrency_is_accepted_but_reported_as_sequential(self):
         service = FakeBenchmarkService([
             {"latency_seconds": 1.0, "completion_tokens": 10},
@@ -137,3 +130,122 @@ class BenchmarkServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _sse(events):
+    """Encodes chunk payloads as the SSE body the backend produces."""
+    body = "".join("data: {}\n\n".format(json.dumps(e)) for e in events)
+    body += "data: [DONE]\n\n"
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    return _Response(body.encode("utf-8"))
+
+
+def _chunk(delta=None, finish_reason=None, usage=None):
+    body = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "qwen3:30b",
+        "choices": [{"index": 0, "delta": delta or {}, "finish_reason": finish_reason}],
+    }
+    if usage:
+        body["usage"] = usage
+    return body
+
+
+class FirstTokenLatencyTests(unittest.TestCase):
+    """Measured over a real stream now that streaming exists. Reasoning
+    deltas are excluded: timing them would flatter the number while saying
+    nothing about when the user sees an answer."""
+
+    def _service(self):
+        config = SimpleNamespace(
+            backend=SimpleNamespace(host="127.0.0.1", port=8000, gpu="0"),
+            model=SimpleNamespace(id="tiny", temperature_default=0.7),
+        )
+        return BenchmarkService(
+            config=config,
+            model_manager=FakeModelManager(),
+            gpu_manager=FakeGPUManager(),
+        )
+
+    def _run(self, events, runs=1):
+        service = self._service()
+        with mock.patch(
+            "services.benchmark.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _sse(events),
+        ):
+            return service.first_token_latency("hi", 32, runs=runs, concurrency=1)
+
+    def test_reports_a_real_measurement(self):
+        events = [
+            _chunk({"role": "assistant"}),
+            _chunk({"content": "Lis"}),
+            _chunk({"content": "bon"}),
+            _chunk({}, finish_reason="stop",
+                   usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}),
+        ]
+        result = self._run(events)
+
+        self.assertTrue(result["available"])
+        self.assertIsNotNone(result["average_seconds"])
+        self.assertEqual(result["results"][0]["total_tokens"], 7)
+        self.assertEqual(result["results"][0]["finish_reason"], "stop")
+
+    def test_reasoning_does_not_count_as_the_first_token(self):
+        events = [
+            _chunk({"role": "assistant"}),
+            _chunk({"reasoning": "thinking hard"}),
+            _chunk({"content": "Lisbon"}),
+            _chunk({}, finish_reason="stop", usage={}),
+        ]
+        result = self._run(events)
+
+        run = result["results"][0]
+        self.assertIsNotNone(run["first_reasoning_seconds"])
+        self.assertIsNotNone(run["first_token_seconds"])
+        # Reasoning arrived first, so the answer must be no earlier than it.
+        self.assertGreaterEqual(
+            run["first_token_seconds"], run["first_reasoning_seconds"]
+        )
+
+    def test_reports_unavailable_when_only_reasoning_is_emitted(self):
+        """Counting a reasoning-only stream as zero would be a fabricated
+        number; say so instead."""
+        events = [
+            _chunk({"role": "assistant"}),
+            _chunk({"reasoning": "thinking forever"}),
+            _chunk({}, finish_reason="stop", usage={}),
+        ]
+        result = self._run(events)
+
+        self.assertFalse(result["available"])
+        self.assertIn("only reasoning", result["message"])
+
+    def test_requests_a_stream(self):
+        service = self._service()
+        with mock.patch(
+            "services.benchmark.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _sse([_chunk({"content": "x"})]),
+        ) as urlopen:
+            service.first_token_latency("hi", 32, runs=1, concurrency=1)
+
+        sent = json.loads(urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertTrue(sent["stream"])
+
+    def test_surfaces_a_mid_stream_error(self):
+        service = self._service()
+        events = [_chunk({"content": "partial"}), {"error": {"message": "daemon died"}}]
+        with mock.patch(
+            "services.benchmark.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _sse(events),
+        ):
+            with self.assertRaisesRegex(BenchmarkError, "daemon died"):
+                service.first_token_latency("hi", 32, runs=1, concurrency=1)

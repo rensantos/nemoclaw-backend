@@ -413,10 +413,14 @@ Supported options:
 - `--json`
 
 `--concurrency` is accepted so command shape is stable for future automation,
-but Phase 4 still runs requests sequentially. `first-token-latency` reports
-that the metric is unavailable rather than faking a number. Streaming now
-exists, so the measurement is finally possible — `BenchmarkService` has not
-been rewired to use it yet.
+but Phase 4 still runs requests sequentially.
+
+`first-token-latency` measures time to the first **answer** token over a real
+SSE stream. Reasoning deltas are deliberately excluded — for a reasoning model
+the first thing on the wire is hidden thinking, and timing that would flatter
+the number while saying nothing about when the user sees an answer. The first
+reasoning token is reported separately for context. A stream that emits only
+reasoning is reported as unavailable rather than counted as zero.
 
 ## Start
 

@@ -104,23 +104,121 @@ class BenchmarkService:
         runs: int = 3,
         concurrency: int = 1,
     ) -> Dict[str, object]:
+        """Time to the first *answer* token, measured over a real SSE
+        stream.
+
+        Reported as unavailable until streaming existed; it is now
+        measured for real. Reasoning deltas are deliberately excluded: for
+        a reasoning model the first thing on the wire is its hidden
+        thinking, and timing that would flatter the number while telling
+        the user nothing about when they see an answer. Streams that
+        produce only reasoning are reported as such rather than counted as
+        zero.
+        """
         self._validate_options(max_tokens, runs, concurrency)
-        result = self._base_result(
-            "first-token-latency",
-            prompt,
-            max_tokens,
-            runs,
-            concurrency,
-            [],
+
+        results = [self._run_stream_once(prompt, max_tokens) for _ in range(runs)]
+        measured = [
+            result["first_token_seconds"]
+            for result in results
+            if result["first_token_seconds"] is not None
+        ]
+
+        if not measured:
+            return self._base_result(
+                "first-token-latency", prompt, max_tokens, runs, concurrency, results,
+                {
+                    "available": False,
+                    "message": (
+                        "No run produced a content token; only reasoning was "
+                        "emitted, so there is no answer latency to report."
+                    ),
+                },
+            )
+
+        return self._base_result(
+            "first-token-latency", prompt, max_tokens, runs, concurrency, results,
             {
-                "available": False,
-                "message": (
-                    "First-token latency is unavailable because streaming is "
-                    "not implemented by this backend yet."
-                ),
+                "available": True,
+                "average_seconds": self._average(measured),
+                "min_seconds": min(measured),
+                "max_seconds": max(measured),
             },
         )
-        return result
+
+    def _run_stream_once(self, prompt: str, max_tokens: int) -> Dict[str, object]:
+        """One streamed request, timing the first content delta."""
+        started = time.perf_counter()
+        first_content = None
+        first_reasoning = None
+        usage = {}
+        finish_reason = None
+
+        for event in self._stream_chat_completion(prompt, max_tokens):
+            choices = event.get("choices") or [{}]
+            delta = choices[0].get("delta") or {}
+            if delta.get("reasoning") and first_reasoning is None:
+                first_reasoning = time.perf_counter() - started
+            if delta.get("content") and first_content is None:
+                first_content = time.perf_counter() - started
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
+            if event.get("usage"):
+                usage = event["usage"]
+
+        return {
+            "first_token_seconds": first_content,
+            "first_reasoning_seconds": first_reasoning,
+            "latency_seconds": time.perf_counter() - started,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "finish_reason": finish_reason,
+        }
+
+    def _stream_chat_completion(self, prompt: str, max_tokens: int):
+        """Yields parsed SSE chunk payloads from the backend, lazily -
+        buffering would destroy the very measurement being taken."""
+        payload = {
+            "model": self._current_model_id(),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": self.config.model.temperature_default,
+            "stream": True,
+        }
+        request = urllib.request.Request(
+            self._chat_url(),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    body = line[len("data: "):]
+                    if body == "[DONE]":
+                        break
+                    try:
+                        decoded = json.loads(body)
+                    except ValueError:
+                        raise BenchmarkError("Backend returned invalid JSON in stream")
+                    if isinstance(decoded, dict):
+                        if decoded.get("error"):
+                            raise BenchmarkError(
+                                "Backend reported an error mid-stream: {}".format(
+                                    decoded["error"].get("message", decoded["error"])
+                                )
+                            )
+                        yield decoded
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise BenchmarkError("Backend returned HTTP {}: {}".format(exc.code, detail))
+        except urllib.error.URLError as exc:
+            raise BenchmarkError("Backend is unavailable: {}".format(exc))
 
     def _run_chat_benchmark(self, prompt: str, max_tokens: int, runs: int) -> List[Dict[str, object]]:
         return [self._run_chat_once(prompt, max_tokens) for _ in range(runs)]
