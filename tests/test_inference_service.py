@@ -268,8 +268,88 @@ class FakeModelManager:
         if model_id not in self.configured:
             raise ValueError("Model is not configured: {}".format(model_id))
 
+    def list_models(self):
+        return [{"id": model_id} for model_id in self.configured]
+
     def select_model(self, model_id):
         self.selected.append(model_id)
+
+
+class CatalogVersusRealityTests(unittest.TestCase):
+    """The configured catalog is an allowlist and can disagree with what is
+    actually on disk in *both* directions. Observed live on one node: six
+    catalogued-but-never-downloaded tags offered as choices, while
+    qwen3:4b - pulled directly with `ollama pull` - was invisible and
+    unusable."""
+
+    class InstalledEngine(FakeEngine):
+        def __init__(self, installed):
+            super().__init__()
+            self._installed = list(installed)
+
+        def installed_models(self):
+            return list(self._installed)
+
+        def model_runtime_info(self, model_ids):
+            return {
+                model_id: {"pulled": model_id in self._installed}
+                for model_id in model_ids
+            }
+
+    def _service(self, installed, configured=("fake-model", "other-model")):
+        return InferenceService(
+            self.InstalledEngine(installed),
+            model_manager=FakeModelManager(configured=configured),
+        )
+
+    def test_installed_but_uncatalogued_model_is_listed(self):
+        service = self._service(installed=["surprise-model"])
+
+        listed = {entry["id"]: entry for entry in service.list_models()["data"]}
+
+        self.assertIn("surprise-model", listed)
+        self.assertTrue(listed["surprise-model"]["pulled"])
+
+    def test_catalogued_but_absent_model_is_still_listed_as_not_pulled(self):
+        """Kept visible on purpose - that is how a caller knows what it
+        could download - but honestly marked."""
+        service = self._service(installed=[])
+
+        listed = {entry["id"]: entry for entry in service.list_models()["data"]}
+
+        self.assertFalse(listed["fake-model"]["pulled"])
+
+    def test_no_duplicate_when_a_model_is_both_catalogued_and_installed(self):
+        service = self._service(installed=["fake-model"])
+
+        ids = [entry["id"] for entry in service.list_models()["data"]]
+
+        self.assertEqual(ids.count("fake-model"), 1)
+
+    def test_installed_model_can_be_switched_to_without_being_catalogued(self):
+        service = self._service(installed=["surprise-model"])
+
+        service.switch_model("surprise-model")
+
+        self.assertEqual(service.loaded_model_id, "surprise-model")
+
+    def test_uncatalogued_and_uninstalled_model_is_still_rejected(self):
+        """The allowlist still does its job for a typo or arbitrary id."""
+        service = self._service(installed=["surprise-model"])
+
+        with self.assertRaises(ValueError):
+            service.switch_model("does-not-exist-anywhere")
+
+    def test_enumeration_failure_degrades_to_the_catalog(self):
+        class BrokenEngine(FakeEngine):
+            def installed_models(self):
+                raise RuntimeError("daemon unreachable")
+
+        service = InferenceService(BrokenEngine(), model_manager=FakeModelManager())
+
+        ids = [entry["id"] for entry in service.list_models()["data"]]
+
+        self.assertIn("fake-model", ids)
 
 
 def _lifecycle_service(engine=None, model_manager=None):

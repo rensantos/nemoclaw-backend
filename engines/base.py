@@ -104,6 +104,22 @@ class InferenceEngine(ABC):
         """
         raise NotImplementedError
 
+    def installed_models(self) -> List[str]:
+        """Model ids physically present on this runtime right now.
+
+        Distinct from the configured catalog, which is an allowlist and
+        can disagree with reality in both directions: it may name models
+        that were never downloaded here, and miss models someone
+        downloaded directly (`ollama pull`) without going through
+        /admin/model/pull. Both were observed live on the same node - six
+        catalogued-but-absent tags listed as choices, while an actually
+        usable one was invisible.
+
+        Empty means "cannot enumerate", not "nothing installed", so
+        callers must not treat it as an authoritative absence.
+        """
+        return []
+
     def model_runtime_info(self, model_ids: List[str]) -> dict:
         """Runtime facts about configured models, keyed by model id.
 

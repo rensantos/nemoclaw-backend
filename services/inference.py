@@ -116,21 +116,41 @@ class InferenceService:
         if self.model_manager is None:
             return self.engine.list_models()
 
-        entries = [
-            model
+        model_ids = [
+            str(model["id"])
             for model in self.model_manager.list_models()
             if self._servable_by_active_engine(model)
         ]
-        runtime_info = self._model_runtime_info([str(m["id"]) for m in entries])
+
+        # Union with what is actually installed. The catalog is an
+        # allowlist and can disagree with reality in both directions: a
+        # model downloaded directly with `ollama pull`, never registered
+        # here, was previously invisible and unusable even though it was
+        # sitting on disk ready to serve. Reality wins for *presence*;
+        # the catalog still decides what may be offered when it is not
+        # installed.
+        for installed in self._installed_models():
+            if installed not in model_ids:
+                model_ids.append(installed)
+
+        runtime_info = self._model_runtime_info(model_ids)
 
         created = int(time.time())
         return {
             "object": "list",
             "data": [
-                self._model_object(str(model["id"]), created, runtime_info)
-                for model in entries
+                self._model_object(model_id, created, runtime_info)
+                for model_id in model_ids
             ],
         }
+
+    def _installed_models(self):
+        """Never let an enumeration failure break the listing - the
+        catalog alone is still a useful answer."""
+        try:
+            return list(self.engine.installed_models())
+        except Exception:
+            return []
 
     def _servable_by_active_engine(self, model) -> bool:
         """Catalog entries carry the engine they belong to; listing
@@ -519,8 +539,20 @@ class InferenceService:
         """Rejects anything outside config.yaml's model.available before any
         runtime change happens (design doc's Failure Modes: "model id is not
         configured: reject before any runtime change"). Raises ValueError.
+
+        A model that is *actually installed* on this runtime is accepted
+        even when the catalog does not name it. The catalog's purpose is
+        to stop a typo or an arbitrary id reaching the engine; a tag
+        physically present on disk is neither - someone deliberately
+        downloaded it, and refusing to serve it while listing it as
+        installed would be incoherent. Found live: qwen3:4b, pulled
+        directly with `ollama pull`, was unusable for exactly this reason.
         """
-        self.model_manager.validate_model(model_id)
+        try:
+            self.model_manager.validate_model(model_id)
+        except ValueError:
+            if model_id not in self._installed_models():
+                raise
 
     @contextlib.contextmanager
     def _serving(self):

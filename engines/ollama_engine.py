@@ -388,6 +388,10 @@ class OllamaEngine(InferenceEngine):
             return None
         return int(disk_mib * VRAM_OVERHEAD_FACTOR)
 
+    def installed_models(self) -> List[str]:
+        """Every tag actually pulled on the daemon, catalogued or not."""
+        return sorted(self.pulled_model_sizes())
+
     def model_runtime_info(self, model_ids: List[str]) -> dict:
         """Which configured tags are actually pulled, how big they are,
         and whether they fit the GPUs this daemon can reach."""
