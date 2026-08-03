@@ -263,6 +263,7 @@ class FakeModelManager:
     def __init__(self, configured=("fake-model", "other-model")):
         self.configured = list(configured)
         self.selected = []
+        self.registered = []
 
     def validate_model(self, model_id):
         if model_id not in self.configured:
@@ -271,7 +272,15 @@ class FakeModelManager:
     def list_models(self):
         return [{"id": model_id} for model_id in self.configured]
 
+    def register_model(self, model_id):
+        if model_id in self.configured:
+            return False
+        self.configured.append(model_id)
+        self.registered.append(model_id)
+        return True
+
     def select_model(self, model_id):
+        self.validate_model(model_id)
         self.selected.append(model_id)
 
 
@@ -332,6 +341,23 @@ class CatalogVersusRealityTests(unittest.TestCase):
         service.switch_model("surprise-model")
 
         self.assertEqual(service.loaded_model_id, "surprise-model")
+
+    def test_persisted_switch_registers_an_uncatalogued_installed_model(self):
+        """select_model() validates against the catalog independently, so a
+        persisted switch to an installed-but-uncatalogued model failed
+        *after* the switch had already been allowed - live, /model
+        qwen3:4b returned 404 for a tag the same node listed as
+        installed. Registering first leaves config.yaml self-consistent:
+        the configured default is, by definition, catalogued."""
+        manager = FakeModelManager(configured=["fake-model"])
+        service = InferenceService(
+            self.InstalledEngine(["surprise-model"]), model_manager=manager
+        )
+
+        service.switch_model("surprise-model", persist=True)
+
+        self.assertIn("surprise-model", manager.registered)
+        self.assertIn("surprise-model", manager.selected)
 
     def test_uncatalogued_and_uninstalled_model_is_still_rejected(self):
         """The allowlist still does its job for a typo or arbitrary id."""

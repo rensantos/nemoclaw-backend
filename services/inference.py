@@ -501,6 +501,17 @@ class InferenceService:
 
         persisted = False
         if persist and model_id is not None:
+            # select_model() validates against the catalog independently of
+            # _validate_model_id(), so an installed-but-uncatalogued model
+            # passed the switch and then failed here - live, "/model
+            # qwen3:4b" returned 404 model_not_configured for a tag the
+            # very same node had just listed as installed.
+            #
+            # Registering rather than bypassing: persisting a model as the
+            # configured default is precisely what "belongs in the catalog"
+            # means, so this leaves config.yaml self-consistent instead of
+            # recording a default the catalog does not admit.
+            self.model_manager.register_model(model_id)
             self.model_manager.select_model(model_id)
             persisted = True
 
