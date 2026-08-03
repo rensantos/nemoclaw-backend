@@ -57,10 +57,17 @@ class ModelManager:
         if self._configured_model(model_id, raw_config) is not None:
             return False
 
-        model_section = raw_config.setdefault("model", {})
-        if not isinstance(model_section, dict):
+        model_section = raw_config.get("model")
+        if model_section is not None and not isinstance(model_section, dict):
             raise ValueError("model section must be a YAML mapping")
 
+        if self._append_available_entry(model_id):
+            return True
+
+        # Fall back to a full rewrite only when the surgical append could
+        # not find the list to extend. This loses comments, so it is a last
+        # resort rather than the normal path (see _append_available_entry).
+        model_section = raw_config.setdefault("model", {})
         available = model_section.get("available")
         if not isinstance(available, list):
             available = []
@@ -71,6 +78,66 @@ class ModelManager:
 
         with self.config_path.open("w", encoding="utf-8") as config_file:
             yaml.safe_dump(raw_config, config_file, sort_keys=False)
+        return True
+
+    def _append_available_entry(self, model_id: str) -> bool:
+        """Appends to model.available by editing lines, not by re-dumping.
+
+        yaml.safe_dump() rewrites the whole document, which strips every
+        comment and re-quotes scalars - observed live: a single registered
+        model deleted 114 lines of hand-written operational notes and
+        silently turned `gpu: "2,3"` into unquoted `gpu: 2,3`. This config
+        carries hard-won deployment knowledge, so a routine append must not
+        destroy it.
+
+        Mirrors _replace_selected_model_line()'s approach. Returns False if
+        the expected structure is not found, leaving the caller to decide.
+        """
+        lines = self.config_path.read_text(encoding="utf-8").splitlines(True)
+
+        in_model_section = False
+        model_indent = None
+        available_indent = None
+        insert_at = None
+        item_indent = "    "
+
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+
+            if not in_model_section:
+                if stripped.startswith("model:"):
+                    in_model_section = True
+                    model_indent = indent
+                continue
+
+            if indent <= model_indent:
+                break  # left the model: mapping
+
+            if available_indent is None:
+                if stripped.startswith("available:"):
+                    available_indent = indent
+                continue
+
+            if indent <= available_indent:
+                break  # left the available: list
+            if stripped.startswith("- "):
+                item_indent = " " * indent
+            insert_at = index + 1
+
+        if available_indent is None or insert_at is None:
+            return False
+
+        entry = (
+            f"{item_indent}- id: {model_id}\n"
+            f"{item_indent}  path: {model_id}\n"
+            f"{item_indent}  engine: ollama\n"
+            f"{item_indent}  notes: added automatically when this model was installed\n"
+        )
+        lines.insert(insert_at, entry)
+        self.config_path.write_text("".join(lines), encoding="utf-8")
         return True
 
     def validate_model(self, model_id: str, raw_config: Optional[dict] = None) -> None:

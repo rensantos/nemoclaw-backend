@@ -147,5 +147,67 @@ model:
         self.assertEqual(model["name"], "Tiny")
 
 
+class RegisterModelTests(unittest.TestCase):
+    """config.yaml carries hand-written deployment knowledge. Registering a
+    model is a routine append and must not destroy it - observed live, a
+    single register_model() call deleted 114 comment lines and silently
+    rewrote `gpu: "2,3"` as unquoted `gpu: 2,3`."""
+
+    COMMENTED_CONFIG = """backend:
+  # GPU 0/1 belong to another user's job - do not touch.
+  gpu: "2,3"
+  engine: ollama
+model:
+  # The live default.
+  id: tiny
+  available:
+    # Catalogued models follow.
+    - id: tiny
+      path: tiny
+      engine: ollama
+"""
+
+    def _manager(self, tmp_dir):
+        config_path = Path(tmp_dir) / "config.yaml"
+        config_path.write_text(self.COMMENTED_CONFIG, encoding="utf-8")
+        return ModelManager(config_path), config_path
+
+    def test_registering_preserves_comments_and_quoting(self):
+        with TemporaryDirectory() as tmp_dir:
+            manager, config_path = self._manager(tmp_dir)
+
+            self.assertTrue(manager.register_model("qwen3:4b"))
+            after = config_path.read_text(encoding="utf-8")
+
+        self.assertIn("# GPU 0/1 belong to another user's job", after)
+        self.assertIn("# The live default.", after)
+        self.assertIn("# Catalogued models follow.", after)
+        # Unquoting this would change how the value parses.
+        self.assertIn('gpu: "2,3"', after)
+
+    def test_registering_adds_a_usable_catalog_entry(self):
+        with TemporaryDirectory() as tmp_dir:
+            manager, config_path = self._manager(tmp_dir)
+            manager.register_model("qwen3:4b")
+
+            parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            ids = [entry["id"] for entry in parsed["model"]["available"]]
+
+            # Must be selectable afterwards, which is the whole point.
+            manager.validate_model("qwen3:4b")
+
+        self.assertIn("qwen3:4b", ids)
+        self.assertIn("tiny", ids)
+
+    def test_registering_a_known_model_changes_nothing(self):
+        with TemporaryDirectory() as tmp_dir:
+            manager, config_path = self._manager(tmp_dir)
+            before = config_path.read_text(encoding="utf-8")
+
+            self.assertFalse(manager.register_model("tiny"))
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), before)
+
+
 if __name__ == "__main__":
     unittest.main()
