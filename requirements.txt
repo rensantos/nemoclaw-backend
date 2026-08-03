@@ -19,3 +19,6 @@ typer
 # have (see docs/problems.md). Transitive via transformers; pinned here
 # so a plain `pip install -r requirements.txt` doesn't re-break it.
 Pillow==9.0.1
+# Test-only: required by fastapi.testclient (starlette) for the
+# behavioural API tests in tests/test_api.py.
+httpx

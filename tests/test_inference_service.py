@@ -537,52 +537,15 @@ class LifecycleRequestRejectionTests(unittest.TestCase):
 
 
 class ApiBoundaryTests(unittest.TestCase):
+    """The one assertion that genuinely belongs at source level: the API
+    layer must not reach into Transformers/CUDA internals. Everything else
+    about the API is now tested behaviourally in test_api.py."""
+
     def test_api_layer_does_not_import_transformers_or_torch(self):
         api_source = Path("api.py").read_text(encoding="utf-8")
 
         self.assertNotIn("transformers", api_source)
         self.assertNotIn("import torch", api_source)
-
-    def test_v1_endpoints_are_unchanged(self):
-        api_source = Path("api.py").read_text(encoding="utf-8")
-
-        self.assertIn('@router.get("/health")', api_source)
-        self.assertIn('@router.get("/v1/models")', api_source)
-        self.assertIn('@router.post("/v1/chat/completions")', api_source)
-
-    def test_admin_lifecycle_endpoints_delegate_to_the_service(self):
-        api_source = Path("api.py").read_text(encoding="utf-8")
-
-        for path in (
-            "/admin/model/load",
-            "/admin/model/unload",
-            "/admin/model/switch",
-        ):
-            self.assertIn('@router.post("{}")'.format(path), api_source)
-
-        for call in (
-            "inference_service.load_model(",
-            "inference_service.unload_model",
-            "inference_service.switch_model(",
-        ):
-            self.assertIn(call, api_source)
-
-        # The routes stay delivery surface only: every failure mode is
-        # mapped from a service/engine exception, never decided here.
-        self.assertEqual(api_source.count("_lifecycle_call("), 4)
-
-    def test_chat_completions_handles_model_not_found_and_engine_unavailable(self):
-        api_source = Path("api.py").read_text(encoding="utf-8")
-
-        self.assertIn("except ModelNotFoundError as exc:", api_source)
-        self.assertIn('"code": "model_not_found"', api_source)
-        self.assertIn("status_code=404", api_source)
-        self.assertIn("except EngineUnavailableError as exc:", api_source)
-        self.assertIn("status_code=503", api_source)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class VRAMWarningTests(unittest.TestCase):
