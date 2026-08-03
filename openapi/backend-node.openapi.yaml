@@ -143,19 +143,39 @@ paths:
         native /models endpoint — do not add one; Core and adapters must
         use this endpoint for model discovery.
 
-        Current behavior: returns exactly one entry describing the
-        currently loaded model (id, created timestamp, owned_by). It does
-        not enumerate every model configured in config/config.yaml's
-        model.available list. The entry tracks runtime state, so it
-        follows a POST /admin/model/switch rather than being fixed at
-        process startup.
+        Returns every model a caller may select: config/config.yaml's
+        model.available catalog, filtered to entries belonging to the
+        active backend.engine, joined with what the engine knows about
+        each at runtime. This is what a frontend model picker should be
+        built on — it can grey out entries that are not "pulled" or do not
+        "fit" instead of offering choices that fail on selection.
+
+        The catalog is the gate: only listed models may be loaded or
+        switched to (POST /admin/model/*). "loaded" marks which one is
+        currently serving, so the listing tracks runtime state.
+
+        Behavior change (2026-08-03, approved): this endpoint previously
+        returned exactly one entry, the loaded model. It now enumerates
+        the selectable catalog, matching OpenAI's own /v1/models
+        semantics. The per-entry OpenAI fields (id, object, created,
+        owned_by) are unchanged, so OpenAI-compatible clients still parse
+        it; "loaded", "pulled", "size_mib" and "fits" are additive
+        Nemoclaw extensions.
       responses:
         "200":
-          description: OpenAI-compatible model list.
+          description: OpenAI-compatible list of selectable models.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
+        "503":
+          description: >-
+            The engine's backing runtime is unreachable, so which models
+            are usable cannot be determined.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleErrorResponse"
 
   /v1/completions:
     post:
@@ -741,6 +761,33 @@ components:
             OllamaEngine. Not a namespacing scheme — single-active-engine
             per backend instance means at most one value is ever present.
           example: local
+        loaded:
+          type: boolean
+          description: >-
+            Nemoclaw extension. Whether this is the model currently
+            serving requests. At most one entry is true; none are when the
+            lifecycle state is "unloaded".
+        pulled:
+          type: boolean
+          description: >-
+            Nemoclaw extension. Whether the model is actually downloaded
+            and usable right now. A catalogued model that is not pulled
+            can be listed but cannot be switched to — the engine rejects
+            it (409 model_unavailable) until it is downloaded. Absent when
+            the engine cannot determine it.
+        size_mib:
+          type: integer
+          description: >-
+            Nemoclaw extension. Estimated VRAM needed to serve this model
+            fully on GPU, derived from its on-disk size. Absent when
+            unknown (e.g. the model is not pulled).
+        fits:
+          type: boolean
+          description: >-
+            Nemoclaw extension. Whether size_mib fits the VRAM the engine
+            runtime can currently reach. False means selecting it may run
+            partly on CPU or fail; ./backend gpu pin-free can re-select
+            GPUs. Absent when either side is unknown.
 
     CompletionRequest:
       type: object

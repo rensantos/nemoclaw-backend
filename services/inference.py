@@ -91,7 +91,63 @@ class InferenceService:
         return health
 
     def list_models(self):
-        return self.engine.list_models()
+        """Every model a caller may select, with what is known about each.
+
+        Joins ModelManager's configured catalog (which models are allowed)
+        with the engine's runtime facts (which are actually downloaded and
+        fit the available GPUs), so a frontend can build a model picker
+        and grey out what is not usable rather than offering choices that
+        fail on selection.
+
+        Falls back to the engine's own listing when no ModelManager was
+        supplied, which is only the case in direct-engine test
+        construction.
+        """
+        if self.model_manager is None:
+            return self.engine.list_models()
+
+        entries = [
+            model
+            for model in self.model_manager.list_models()
+            if self._servable_by_active_engine(model)
+        ]
+        runtime_info = self._model_runtime_info([str(m["id"]) for m in entries])
+
+        created = int(time.time())
+        return {
+            "object": "list",
+            "data": [
+                self._model_object(str(model["id"]), created, runtime_info)
+                for model in entries
+            ],
+        }
+
+    def _servable_by_active_engine(self, model) -> bool:
+        """Catalog entries carry the engine they belong to; listing
+        Transformers repos while running Ollama would offer choices this
+        instance cannot serve at all."""
+        entry_engine = model.get("engine")
+        return not entry_engine or entry_engine == settings.backend.engine
+
+    def _model_runtime_info(self, model_ids):
+        try:
+            return self.engine.model_runtime_info(model_ids)
+        except EngineUnavailableError:
+            raise
+        except Exception:
+            # Unknown beats wrong: the catalog is still worth returning.
+            return {}
+
+    def _model_object(self, model_id, created, runtime_info):
+        model_object = {
+            "id": model_id,
+            "object": "model",
+            "created": created,
+            "owned_by": settings.backend.engine,
+            "loaded": model_id == self.loaded_model_id,
+        }
+        model_object.update(runtime_info.get(model_id, {}))
+        return model_object
 
     def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
         with self._serving():

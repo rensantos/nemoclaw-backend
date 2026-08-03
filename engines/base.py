@@ -81,6 +81,21 @@ class InferenceEngine(ABC):
     # what to do about it, keeping lifecycle policy in the service layer.
     supports_runtime_lifecycle = False
 
+    def model_runtime_info(self, model_ids: List[str]) -> dict:
+        """Runtime facts about configured models, keyed by model id.
+
+        The catalog of *selectable* models is configuration, owned by
+        ModelManager. Whether each one is actually usable right now -
+        downloaded, and small enough for the GPUs this runtime can reach -
+        is a runtime fact only the engine knows. InferenceService joins
+        the two for /v1/models.
+
+        Each value may carry "pulled" (bool), "size_mib" (int) and "fits"
+        (bool). Omit any key that cannot be determined rather than
+        guessing; the default is to know nothing.
+        """
+        return {}
+
     def vram_warning_for(self, model_id: str) -> Optional[str]:
         """A human-readable caution about serving model_id, or None.
 

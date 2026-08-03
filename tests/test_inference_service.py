@@ -614,3 +614,114 @@ class VRAMWarningTests(unittest.TestCase):
 
         self.assertEqual(service.lifecycle_state, LifecycleState.READY)
         self.assertNotIn("warning", result)
+
+
+class CatalogFakeModelManager(FakeModelManager):
+    def __init__(self, entries):
+        super().__init__([str(e["id"]) for e in entries])
+        self.entries = entries
+
+    def list_models(self):
+        return self.entries
+
+
+class ModelListingTests(unittest.TestCase):
+    """/v1/models drives the frontend's model picker: every selectable
+    model, flagged with whether it is actually usable."""
+
+    def _entries(self):
+        return [
+            {"id": "qwen3:30b", "engine": "ollama"},
+            {"id": "qwen3:1.7b", "engine": "ollama"},
+            {"id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "engine": "transformers"},
+        ]
+
+    def _service(self, runtime_info=None):
+        class CatalogEngine(FakeEngine):
+            def model_runtime_info(self, model_ids):
+                return runtime_info or {}
+
+        engine = CatalogEngine("qwen3:30b")
+        return InferenceService(
+            engine, model_manager=CatalogFakeModelManager(self._entries())
+        )
+
+    def test_lists_the_whole_catalog_not_just_the_loaded_model(self):
+        service = self._service()
+
+        ids = [m["id"] for m in service.list_models()["data"]]
+
+        self.assertIn("qwen3:30b", ids)
+        self.assertIn("qwen3:1.7b", ids)
+
+    def test_excludes_entries_for_other_engines(self):
+        service = self._service()
+
+        ids = [m["id"] for m in service.list_models()["data"]]
+
+        # config.backend.engine is ollama in this repo's config.
+        self.assertNotIn("TinyLlama/TinyLlama-1.1B-Chat-v1.0", ids)
+
+    def test_marks_exactly_the_loaded_model(self):
+        service = self._service()
+
+        loaded = [m["id"] for m in service.list_models()["data"] if m["loaded"]]
+
+        self.assertEqual(loaded, ["qwen3:30b"])
+
+    def test_merges_engine_runtime_flags(self):
+        service = self._service({
+            "qwen3:30b": {"pulled": True, "size_mib": 26545, "fits": True},
+            "qwen3:1.7b": {"pulled": False},
+        })
+
+        by_id = {m["id"]: m for m in service.list_models()["data"]}
+
+        self.assertTrue(by_id["qwen3:30b"]["pulled"])
+        self.assertTrue(by_id["qwen3:30b"]["fits"])
+        self.assertEqual(by_id["qwen3:30b"]["size_mib"], 26545)
+        self.assertFalse(by_id["qwen3:1.7b"]["pulled"])
+        # Unknown keys are omitted, never guessed.
+        self.assertNotIn("fits", by_id["qwen3:1.7b"])
+
+    def test_keeps_the_openai_compatible_fields(self):
+        service = self._service()
+
+        model = service.list_models()["data"][0]
+
+        for field in ("id", "object", "created", "owned_by"):
+            self.assertIn(field, model)
+        self.assertEqual(model["object"], "model")
+        self.assertEqual(service.list_models()["object"], "list")
+
+    def test_catalog_still_returned_when_runtime_info_fails(self):
+        class BrokenEngine(FakeEngine):
+            def model_runtime_info(self, model_ids):
+                raise RuntimeError("nvidia-smi exploded")
+
+        service = InferenceService(
+            BrokenEngine("qwen3:30b"),
+            model_manager=CatalogFakeModelManager(self._entries()),
+        )
+
+        ids = [m["id"] for m in service.list_models()["data"]]
+
+        self.assertIn("qwen3:30b", ids)
+
+    def test_unreachable_engine_propagates_rather_than_lying(self):
+        class DownEngine(FakeEngine):
+            def model_runtime_info(self, model_ids):
+                raise EngineUnavailableError("daemon down")
+
+        service = InferenceService(
+            DownEngine("qwen3:30b"),
+            model_manager=CatalogFakeModelManager(self._entries()),
+        )
+
+        with self.assertRaises(EngineUnavailableError):
+            service.list_models()
+
+    def test_falls_back_to_the_engine_without_a_model_manager(self):
+        service = InferenceService(FakeEngine())
+
+        self.assertEqual(service.list_models(), {"object": "list", "data": []})

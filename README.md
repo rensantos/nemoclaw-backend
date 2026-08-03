@@ -526,6 +526,40 @@ Log: /home/renatobox/ubi-a4000/logs/backend.log
 python -m unittest discover -s tests
 ```
 
+## Model Discovery
+
+`GET /v1/models` lists every model a caller may select - the
+`model.available` catalog filtered to the active `backend.engine` - joined
+with what the engine knows about each. It is what a frontend model picker
+should be built on:
+
+```json
+{
+  "id": "qwen3:30b",
+  "object": "model", "created": 1785717406, "owned_by": "ollama",
+  "loaded": true, "pulled": true, "size_mib": 26545, "fits": true
+}
+```
+
+`id`/`object`/`created`/`owned_by` are the standard OpenAI fields. The rest
+are Nemoclaw extensions:
+
+- `loaded` - currently serving requests (at most one entry).
+- `pulled` - actually downloaded and usable now. Selecting one that isn't
+  returns `409 model_unavailable`.
+- `size_mib` - estimated VRAM to serve it fully on GPU.
+- `fits` - whether that fits the VRAM the runtime can currently reach.
+  `false` means it may run partly on CPU; see `./backend gpu pin-free`.
+
+Unknown facts are omitted rather than guessed, so a model that isn't pulled
+carries no `size_mib` or `fits`. Selecting a model outside the catalog
+returns `404 model_not_configured` - the catalog is the gate on what may be
+chosen.
+
+Loading is lazy and needs no action: if the chosen model is resident,
+inference starts immediately; if it was evicted (5-minute keep-alive), the
+next request reloads it.
+
 ## API Tests
 
 ```bash

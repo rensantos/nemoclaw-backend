@@ -781,3 +781,42 @@ class OllamaVRAMFitWarningTests(unittest.TestCase):
 
         self.assertEqual(sorted(sizes), ["qwen3:30b", "small:1b"])
         self.assertGreater(sizes["qwen3:30b"], sizes["small:1b"])
+
+
+class OllamaModelRuntimeInfoTests(unittest.TestCase):
+    """Runtime facts backing the /v1/models picker: is each catalogued tag
+    actually pulled, and does it fit the GPUs this daemon can reach."""
+
+    def _engine(self):
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(_make_config("ollama", model_id="qwen3:30b"))
+
+    def test_flags_pulled_size_and_fit(self):
+        engine = self._engine()
+        with mock.patch.object(
+            engine, "pulled_model_sizes",
+            return_value={"qwen3:30b": 26545, "qwen3:1.7b": 1944},
+        ), mock.patch.object(engine, "visible_vram_mib", return_value=16117):
+            info = engine.model_runtime_info(
+                ["qwen3:30b", "qwen3:1.7b", "gemma3:4b"]
+            )
+
+        self.assertEqual(
+            info["qwen3:30b"], {"pulled": True, "size_mib": 26545, "fits": False}
+        )
+        self.assertEqual(
+            info["qwen3:1.7b"], {"pulled": True, "size_mib": 1944, "fits": True}
+        )
+        # Catalogued but not pulled: listed, with nothing invented.
+        self.assertEqual(info["gemma3:4b"], {"pulled": False})
+
+    def test_omits_fit_when_visible_vram_is_unknown(self):
+        engine = self._engine()
+        with mock.patch.object(
+            engine, "pulled_model_sizes", return_value={"qwen3:30b": 26545}
+        ), mock.patch.object(engine, "visible_vram_mib", return_value=None):
+            info = engine.model_runtime_info(["qwen3:30b"])
+
+        self.assertNotIn("fits", info["qwen3:30b"])
+        self.assertEqual(info["qwen3:30b"]["size_mib"], 26545)

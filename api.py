@@ -27,7 +27,10 @@ def health_check():
 
 @router.get("/v1/models")
 def models():
-    return inference_service.list_models()
+    try:
+        return inference_service.list_models()
+    except EngineUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/v1/chat/completions")

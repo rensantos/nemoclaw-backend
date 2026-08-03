@@ -869,6 +869,39 @@ up code changes until `./backend restart` - a live `/admin/model/switch`
 silently returned no `warning` for exactly this reason before the
 restart, which looked like a bug and was not.
 
+`/v1/models` now lists selectable models (2026-08-03, **approved Tier 1
+behavior change**): it previously returned exactly one entry, the loaded
+model, so nothing exposed the *choices* a frontend picker needs. Three
+lists disagreed - `/v1/models` (1), `config.yaml`'s catalog (10), actually
+pulled (1) - meaning a picker built on the catalog would have offered 10
+options of which 9 failed.
+
+- It now enumerates `model.available`, **filtered to the active
+  `backend.engine`** (listing Transformers repos while running Ollama
+  offered choices the instance cannot serve), joined with runtime facts.
+  This matches OpenAI's own `/v1/models` semantics and the contract's
+  existing decision record that there must be no separate native
+  model-listing endpoint.
+- OpenAI fields (`id`, `object`, `created`, `owned_by`) are unchanged, so
+  existing clients still parse it. `loaded`, `pulled`, `size_mib`, `fits`
+  are additive Nemoclaw extensions. Unknown facts are **omitted, never
+  guessed** (a non-pulled model has no `size_mib`/`fits`).
+- Ownership split held: `ModelManager` owns the catalog (what may be
+  selected), the engine owns runtime facts via the new
+  `InferenceEngine.model_runtime_info(model_ids)` (default `{}`),
+  `InferenceService.list_models()` joins them. A failure computing
+  runtime facts degrades to catalog-only rather than failing the list; an
+  `EngineUnavailableError` still propagates, and `api.py` now maps it to
+  `503` on `/v1/models` (previously an unhandled `500`).
+
+Live-verified on UBI that the flags are truthful, not decorative:
+`/v1/models` returns 7 Ollama entries (3 Transformers filtered out) with
+`qwen3:30b` `loaded/pulled/fits` and six `pulled: false`; selecting a
+`pulled: false` entry returns `409 model_unavailable`, an uncatalogued id
+returns `404 model_not_configured`, and the `pulled/fits` one loads and
+serves. Lazy loading needs no backend code - Ollama reloads an evicted
+model on the next request (confirmed).
+
 **Operator decisions taken 2026-08-02, deliberately leaving two things
 as they are:**
 

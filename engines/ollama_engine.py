@@ -291,6 +291,23 @@ class OllamaEngine(InferenceEngine):
             return None
         return int(disk_mib * VRAM_OVERHEAD_FACTOR)
 
+    def model_runtime_info(self, model_ids: List[str]) -> dict:
+        """Which configured tags are actually pulled, how big they are,
+        and whether they fit the GPUs this daemon can reach."""
+        sizes = self.pulled_model_sizes()
+        available = self.visible_vram_mib()
+
+        info = {}
+        for model_id in model_ids:
+            required = sizes.get(model_id)
+            entry = {"pulled": model_id in sizes}
+            if required is not None:
+                entry["size_mib"] = required
+                if available is not None:
+                    entry["fits"] = required <= available
+            info[model_id] = entry
+        return info
+
     def pulled_model_sizes(self) -> dict:
         """{tag: estimated VRAM MiB} for every tag pulled on the daemon."""
         sizes = {}
