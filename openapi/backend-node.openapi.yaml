@@ -916,6 +916,15 @@ components:
         persisted:
           type: boolean
           description: Whether config.yaml was rewritten (see request "persist").
+        warning:
+          type: string
+          description: >-
+            Present only when the transition succeeded but something is
+            worth flagging - currently that the model looks larger than
+            the VRAM the engine runtime can reach, so it may run partly on
+            CPU. Advisory: the requirement is estimated from the model's
+            on-disk size, so this never fails the operation. Absent when
+            there is nothing to report.
 
     LifecycleErrorResponse:
       type: object

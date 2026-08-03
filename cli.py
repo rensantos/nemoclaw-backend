@@ -1108,6 +1108,8 @@ def gpu_pin_free(
     for gpu in selection:
         typer.echo("  GPU {} ('{}'): {}".format(gpu.index, gpu.name, _vram_usage(gpu)))
 
+    _print_model_fit_table(selection)
+
     if dry_run:
         typer.echo("Dry run: daemon left untouched.")
         return
@@ -1144,6 +1146,39 @@ def _estimated_model_vram_mib():
         return OllamaEngine(config).estimated_vram_mib()
     except Exception:
         return None
+
+
+def _pulled_model_sizes():
+    from engines.ollama_engine import OllamaEngine
+
+    try:
+        return OllamaEngine(config).pulled_model_sizes()
+    except Exception:
+        return {}
+
+
+def _print_model_fit_table(selection) -> None:
+    """Show every pulled model against the chosen GPUs.
+
+    The frontend can switch model at any time, but the daemon's GPU set
+    only changes when it restarts - so a later switch can outgrow this
+    pin. Listing the other pulled tags now makes that visible before it
+    bites, instead of at load time.
+    """
+    sizes = _pulled_model_sizes()
+    if len(sizes) < 2:
+        return
+
+    capacity = sum(gpu.memory_total_mib or 0 for gpu in selection)
+    typer.echo("Pulled models against this selection ({} total):".format(_mib(capacity)))
+    for name, required in sorted(sizes.items(), key=lambda item: -item[1]):
+        marker = "fits" if required <= capacity else "DOES NOT FIT"
+        current = " (current)" if name == config.model.id else ""
+        typer.echo("  {:<28} ~{:>8} - {}{}".format(name, _mib(required), marker, current))
+    typer.echo(
+        "  Switching to a model marked DOES NOT FIT needs another "
+        "'gpu pin-free' run, or more free GPUs."
+    )
 
 
 @gpu_app.command("current")

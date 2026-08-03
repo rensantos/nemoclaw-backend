@@ -81,6 +81,15 @@ class InferenceEngine(ABC):
     # what to do about it, keeping lifecycle policy in the service layer.
     supports_runtime_lifecycle = False
 
+    def vram_warning_for(self, model_id: str) -> Optional[str]:
+        """A human-readable caution about serving model_id, or None.
+
+        Lets an engine surface a fit problem the service layer cannot see
+        (e.g. the model is larger than the GPUs the runtime can reach)
+        without failing the operation, since such checks are estimates.
+        """
+        return None
+
     def runtime_pids(self) -> List[int]:
         """PIDs that may hold GPU memory on this engine's behalf.
 

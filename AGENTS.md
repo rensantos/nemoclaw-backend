@@ -829,6 +829,46 @@ restart. **Not persistent by design** - a daemon restart or reboot
 returns to whatever the `@reboot` crontab sets, and the command is
 re-run when the free set changes.
 
+Multi-model sizing (2026-08-03): `pin-free` sizes for `config.model.id`,
+which is correct **only because the frontend's model choice is
+persisted** - the frontend picks the model and can change it at any time,
+so `config.model.id` is the single record of what is actually served.
+Frontend switches must therefore use `"persist": true`. Single model
+resident at a time is the operating assumption (`OLLAMA_MAX_LOADED_MODELS`
+is `0`/auto, so Ollama *could* hold several, but only one of the
+available tags is used); nothing sizes for concurrent residency.
+
+The gap that created: the daemon's GPU set only changes when it restarts,
+while the served model can change any time, so a switch can outgrow the
+pin it was placed under.
+
+- `OllamaEngine.visible_vram_mib()` sums the VRAM of the GPUs the daemon's
+  own `CUDA_VISIBLE_DEVICES` exposes; `vram_warning_for(model_id)`
+  compares that to the model's estimate.
+- New `InferenceEngine.vram_warning_for()` (default `None`) so the service
+  can ask without Ollama-specific knowledge.
+  `InferenceService._vram_warning()` computes it **once**, logs it, and
+  attaches it to the load/switch result as an optional `warning` field
+  (added to `LifecycleResultResponse` in the OpenAPI contract). Advisory
+  only - the requirement is an estimate and Ollama can offload to CPU, so
+  refusing on a heuristic would block legitimate switches, and a failure
+  in the check itself never breaks the transition.
+- `pin-free` prints a per-model fit table (every pulled tag vs. the
+  selected GPUs' total) so an unfittable future switch is visible before
+  it bites.
+
+Live-verified on UBI with two tags pulled (`qwen3:30b` 17.28 GiB +
+`qwen3:1.7b` 1.27 GiB, disk 8.2 -> 7.0GB): with the daemon pinned to one
+GPU for the small model, the table marked `qwen3:30b DOES NOT FIT` and
+switching to it returned the `warning` field; after re-running `pin-free`
+(2 GPUs) the same switch returned no warning and the model loaded on GPU
+0/1 only. `qwen3:1.7b` removed afterwards, disk back to 8.2GB.
+
+Note for future sessions: the running `uvicorn` backend does **not** pick
+up code changes until `./backend restart` - a live `/admin/model/switch`
+silently returned no `warning` for exactly this reason before the
+restart, which looked like a bug and was not.
+
 **Operator decisions taken 2026-08-02, deliberately leaving two things
 as they are:**
 

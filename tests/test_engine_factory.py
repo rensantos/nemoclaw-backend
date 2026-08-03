@@ -8,6 +8,7 @@ from unittest import mock
 
 from config import BackendConfig, Config, ModelConfig
 from engines.base import EngineUnavailableError, ModelNotFoundError
+from services.gpu import GPUInfo
 from services.inference import InferenceService, _build_engine
 from services.lifecycle import LifecycleState
 
@@ -713,3 +714,70 @@ class OllamaDaemonRestartTests(unittest.TestCase):
 
         with mock.patch.object(ollama_engine.os, "readlink", side_effect=OSError):
             self.assertIsNone(ollama_engine.daemon_log_path(23825))
+
+
+class OllamaVRAMFitWarningTests(unittest.TestCase):
+    """The frontend can switch model at any time, but the daemon's GPU set
+    only changes on restart - so a switch can outgrow its pin."""
+
+    def _engine(self, model_id="qwen3:30b"):
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(_make_config("ollama", model_id=model_id))
+
+    def test_warns_when_model_exceeds_visible_vram(self):
+        engine = self._engine()
+        with mock.patch.object(engine, "estimated_vram_mib", return_value=40000), \
+                mock.patch.object(engine, "visible_vram_mib", return_value=32234):
+            warning = engine.vram_warning_for("big:70b")
+
+        self.assertIn("big:70b", warning)
+        self.assertIn("gpu pin-free", warning)
+
+    def test_silent_when_the_model_fits(self):
+        engine = self._engine()
+        with mock.patch.object(engine, "estimated_vram_mib", return_value=26545), \
+                mock.patch.object(engine, "visible_vram_mib", return_value=32234):
+            self.assertIsNone(engine.vram_warning_for("qwen3:30b"))
+
+    def test_silent_when_either_side_is_unknown(self):
+        engine = self._engine()
+        with mock.patch.object(engine, "estimated_vram_mib", return_value=None), \
+                mock.patch.object(engine, "visible_vram_mib", return_value=32234):
+            self.assertIsNone(engine.vram_warning_for("x"))
+        with mock.patch.object(engine, "estimated_vram_mib", return_value=1), \
+                mock.patch.object(engine, "visible_vram_mib", return_value=None):
+            self.assertIsNone(engine.vram_warning_for("x"))
+
+    def test_visible_vram_sums_only_the_daemons_own_gpus(self):
+        from engines import ollama_engine
+
+        engine = self._engine()
+        gpus = [
+            GPUInfo(index=str(i), name="RTX A4000", memory_total_mib=16117,
+                    memory_used_mib=3, memory_free_mib=16114, temperature_c=40,
+                    utilization_percent=0, driver_version="470.86")
+            for i in range(4)
+        ]
+        with mock.patch.object(ollama_engine, "find_daemon_pids", return_value=[23825]), \
+                mock.patch.object(
+                    engine.gpu_manager, "visible_gpu_indexes_for_process",
+                    return_value=["0", "1"],
+                ), \
+                mock.patch.object(engine.gpu_manager, "detect_gpus", return_value=gpus):
+            self.assertEqual(engine.visible_vram_mib(), 32234)
+
+    def test_pulled_model_sizes_covers_every_tag(self):
+        engine = self._engine()
+        payload = {"models": [
+            {"name": "qwen3:30b", "size": 18556699314},
+            {"name": "small:1b", "size": 1073741824},
+        ]}
+        with mock.patch(
+            "engines.ollama_engine.urllib.request.urlopen",
+            side_effect=lambda *a, **k: _fake_urlopen_response(payload),
+        ):
+            sizes = engine.pulled_model_sizes()
+
+        self.assertEqual(sorted(sizes), ["qwen3:30b", "small:1b"])
+        self.assertGreater(sizes["qwen3:30b"], sizes["small:1b"])

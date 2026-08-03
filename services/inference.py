@@ -141,6 +141,7 @@ class InferenceService:
                 lambda: self.engine.load_model(model_id),
                 persist,
                 timeout,
+                warning=self._vram_warning(model_id),
             )
 
     def unload_model(self, timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS):
@@ -189,6 +190,7 @@ class InferenceService:
                 lambda: self.engine.switch_model(model_id),
                 persist,
                 timeout,
+                warning=self._vram_warning(model_id),
             )
 
     def _give_up_and_unload(self):
@@ -208,8 +210,31 @@ class InferenceService:
         self.transition_started_at = None
         return self._result(None, previous_model, 0.0, persisted=False)
 
+    def _vram_warning(self, model_id):
+        """Engine-supplied caution (e.g. the model is bigger than the GPUs
+        the runtime can reach). Advisory only - never fails the call.
+
+        Computed here rather than inside the engine's switch/load so the
+        estimate is made once and a failing check can never break a
+        transition that would otherwise succeed.
+        """
+        try:
+            warning = self.engine.vram_warning_for(model_id)
+        except Exception:
+            return None
+        if warning:
+            _logger.warning("%s", warning)
+        return warning
+
     def _transition(
-        self, transitional_state, final_state, model_id, operation, persist, timeout
+        self,
+        transitional_state,
+        final_state,
+        model_id,
+        operation,
+        persist,
+        timeout,
+        warning=None,
     ):
         previous_model = self.loaded_model_id
         previous_state = self.lifecycle_state
@@ -254,11 +279,15 @@ class InferenceService:
             persisted = True
 
         return self._result(
-            model_id, previous_model, time.monotonic() - started_at, persisted
+            model_id,
+            previous_model,
+            time.monotonic() - started_at,
+            persisted,
+            warning,
         )
 
-    def _result(self, loaded_model, previous_model, elapsed, persisted):
-        return {
+    def _result(self, loaded_model, previous_model, elapsed, persisted, warning=None):
+        result = {
             "status": "ok",
             "lifecycle_state": self.lifecycle_state.value,
             "loaded_model": loaded_model,
@@ -266,6 +295,9 @@ class InferenceService:
             "elapsed_seconds": round(elapsed, 3),
             "persisted": persisted,
         }
+        if warning:
+            result["warning"] = warning
+        return result
 
     def _require_lifecycle_support(self):
         if not self.engine.supports_runtime_lifecycle:

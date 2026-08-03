@@ -291,6 +291,41 @@ class OllamaEngine(InferenceEngine):
             return None
         return int(disk_mib * VRAM_OVERHEAD_FACTOR)
 
+    def pulled_model_sizes(self) -> dict:
+        """{tag: estimated VRAM MiB} for every tag pulled on the daemon."""
+        sizes = {}
+        for model in self._get_tags().get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            name, size = model.get("name"), model.get("size")
+            if name and isinstance(size, (int, float)):
+                mib = int(size / (1024 * 1024))
+                sizes[name] = int(mib * VRAM_OVERHEAD_FACTOR)
+        return sizes
+
+    def visible_vram_mib(self) -> Optional[int]:
+        """Total VRAM the daemon can actually reach, i.e. the sum over the
+        GPUs its own CUDA_VISIBLE_DEVICES exposes.
+
+        The daemon's visible set only changes when it restarts, while the
+        served model can change at any time, so a switch can outgrow the
+        pin it was placed under. None when visibility can't be determined.
+        """
+        pids = find_daemon_pids()
+        if not pids:
+            return None
+
+        visible = self.gpu_manager.visible_gpu_indexes_for_process(pids[0])
+        if visible is None:
+            return None
+
+        visible_set = set(visible)
+        total = 0
+        for gpu in self.gpu_manager.detect_gpus():
+            if str(gpu.index) in visible_set and gpu.memory_total_mib:
+                total += gpu.memory_total_mib
+        return total or None
+
     def load_model(self, model_id: Optional[str] = None) -> None:
         """Validates the target tag is present locally. Never pulls."""
         target = self.model_id if model_id is None else model_id
@@ -305,6 +340,34 @@ class OllamaEngine(InferenceEngine):
         self._require_tag(model_id)
         self.unload_model()
         self.model_id = model_id
+
+    def vram_warning_for(self, model_id: str) -> Optional[str]:
+        """Logs when a switch target looks too big for the GPUs the daemon
+        can currently reach.
+
+        The daemon's GPU set is fixed until it restarts (./backend gpu
+        pin-free), but the served model is chosen by the frontend and can
+        change at any time - so a switch can outgrow the pin it was placed
+        under. Only a warning: the requirement is an estimate, and Ollama
+        can still run with layers offloaded to CPU, so refusing on a
+        heuristic would block legitimate switches.
+        """
+        try:
+            required = self.estimated_vram_mib(model_id)
+            available = self.visible_vram_mib()
+        except Exception:
+            return None
+
+        if required is None or available is None or required <= available:
+            return None
+
+        return (
+            "Model '{}' needs roughly {} MiB but the Ollama daemon can only "
+            "reach {} MiB of VRAM; it may run partly on CPU or fail to load. "
+            "Run './backend gpu pin-free' to re-select GPUs for it.".format(
+                model_id, required, available
+            )
+        )
 
     def _require_tag(self, model_id: str) -> None:
         if model_id not in self._tag_names(self._get_tags()):

@@ -353,6 +353,31 @@ free changes, so a static pin in config would fail exactly when the configured
 cards are busy and others are idle. Re-run it when the picture changes; a
 daemon restart or reboot returns to whatever its startup command sets.
 
+With more than one model pulled, it also prints a fit table:
+
+```text
+Pulled models against this selection (16117 MiB total):
+  qwen3:30b                    ~26545 MiB - DOES NOT FIT
+  qwen3:1.7b                    ~1944 MiB - fits (current)
+```
+
+The sizing is for `model.id`, so **a frontend that changes the model must
+persist that choice** (`"persist": true`) - `config.model.id` is the record
+of what is actually being served. Because the daemon's GPU set only changes
+on restart while the model can change at any time, a later switch can outgrow
+its pin; `POST /admin/model/switch` then returns an advisory `warning` field:
+
+```json
+{
+  "status": "ok",
+  "loaded_model": "qwen3:30b",
+  "warning": "Model 'qwen3:30b' needs roughly 26545 MiB but the Ollama daemon can only reach 16117 MiB of VRAM; it may run partly on CPU or fail to load. Run './backend gpu pin-free' to re-select GPUs for it."
+}
+```
+
+It warns rather than refuses: the requirement is estimated from the model's
+on-disk size, and Ollama can still run with layers offloaded to CPU.
+
 This phase does not implement GPU selection, multi-GPU scheduling, MIG, CUDA
 affinity, or dashboards. Benchmark commands are provided separately by
 `BenchmarkService`.

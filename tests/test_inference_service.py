@@ -24,6 +24,7 @@ class FakeEngine:
         self.calls = []
         self.model_id = model_id
         self._runtime_pids = list(runtime_pids)
+        self.vram_warning = None
 
     def runtime_pids(self):
         return self._runtime_pids
@@ -41,6 +42,9 @@ class FakeEngine:
     def switch_model(self, model_id):
         self.calls.append(("switch_model", model_id))
         self.model_id = model_id
+
+    def vram_warning_for(self, model_id):
+        return self.vram_warning
 
     def health(self):
         self.calls.append("health")
@@ -577,3 +581,36 @@ class ApiBoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VRAMWarningTests(unittest.TestCase):
+    """The daemon's GPU set only changes on restart, so a frontend-driven
+    switch can outgrow it. Advisory only - it must never fail the switch."""
+
+    def test_switch_surfaces_the_engine_warning_in_the_result(self):
+        engine = FakeEngine()
+        engine.vram_warning = "needs 40000 MiB, only 32234 MiB reachable"
+        service = _lifecycle_service(engine)
+
+        result = service.switch_model("other-model")
+
+        self.assertEqual(result["warning"], engine.vram_warning)
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
+        self.assertEqual(service.loaded_model_id, "other-model")
+
+    def test_no_warning_key_when_the_model_fits(self):
+        service = _lifecycle_service(FakeEngine())
+
+        self.assertNotIn("warning", service.switch_model("other-model"))
+
+    def test_a_failing_warning_check_never_breaks_the_switch(self):
+        class ExplodingWarning(FakeEngine):
+            def vram_warning_for(self, model_id):
+                raise RuntimeError("nvidia-smi exploded")
+
+        service = _lifecycle_service(ExplodingWarning())
+
+        result = service.switch_model("other-model")
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
+        self.assertNotIn("warning", result)
