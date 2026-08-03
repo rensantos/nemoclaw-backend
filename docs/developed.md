@@ -27,8 +27,10 @@ Hugging Face Transformers causal language model on the UBI machine.
   `backend start`, `backend stop`, `backend restart`, `backend status`,
   `backend health`, `backend config`, `backend logs`, and `backend model ...`.
 - `backend model list`, `backend model current`, `backend model use`, and
-  `backend model info` manage configured model selection in YAML. Runtime
-  hot-switching is not implemented.
+  `backend model info` manage configured model selection in YAML.
+  `backend model load|unload|switch` perform real runtime transitions
+  against a running backend (see below); `model use` remains the
+  config-only path that needs a restart.
 - `services/model.py` contains `ModelManager`, which owns configured model
   metadata, selected/default model validation, and YAML selection updates.
 - `config.py` acts as the configuration provider; model business logic lives in
@@ -47,8 +49,11 @@ Hugging Face Transformers causal language model on the UBI machine.
   benchmarks without placing timing logic inside the CLI.
 - Benchmarking measures the backend as a client would by calling
   `/v1/chat/completions`; it does not call Transformers or engines directly.
-- First-token latency reports unavailable while streaming is not implemented,
-  rather than inventing a metric.
+- First-token latency is measured over a real SSE stream. Reasoning deltas
+  are excluded from the metric: for a reasoning model the first thing on the
+  wire is hidden thinking, so timing that would flatter the number while
+  saying nothing about when the user sees an answer. A stream that produces
+  only reasoning is reported unavailable rather than counted as zero.
 - The CLI launches Uvicorn with the resolved YAML/env configuration, writes
   `run/backend.pid`, writes `logs/backend.log`, reports health, and can show or
   follow logs.
@@ -72,15 +77,21 @@ Hugging Face Transformers causal language model on the UBI machine.
 - `tests/test_gpu_manager.py` contains stdlib tests for GPUManager parsing and
   current-GPU reporting.
 - `tests/test_benchmark_service.py` contains stdlib tests for latency,
-  throughput, VRAM snapshots, first-token-latency availability, and concurrency
+  throughput, VRAM snapshots, streamed first-token latency, and concurrency
   reporting.
+- `tests/test_api.py` exercises the HTTP layer behaviourally through
+  FastAPI's `TestClient`; `tests/test_gpu_safety.py` covers start-time GPU
+  policy as verdicts rather than console output.
 - `requirements.txt` is human-maintained and records direct runtime
   dependencies only. It should not be generated from `pip freeze`.
-- `services/lifecycle.py` contains the `LifecycleState` enum and the fixed
-  stub response builder for `/admin/model/*` (Phase 5).
-- `InferenceService` owns `lifecycle_state`, currently always `ready`;
-  `/health` reports it alongside `status`, `model`, `cuda`, and `gpu`.
-  `backend status` prints `Lifecycle: <state>`.
+- `services/lifecycle.py` contains the `LifecycleState` enum, the
+  `LEGAL_TRANSITIONS` table with its `validate_transition()` guard, and the
+  lifecycle exceptions (`LifecycleUnavailableError`,
+  `LifecycleConflictError`, `StreamingNotSupportedError`).
+- `InferenceService` owns `lifecycle_state` and moves through the real
+  transitions; `/health` reports it alongside `status`, `model`, `cuda`,
+  `gpu`, `loaded_model`, and `target_model`. `backend status` prints
+  `Lifecycle: <state>`.
 - `api.py` exposes `/admin/model/load`, `/admin/model/unload`, and
   `/admin/model/switch` under `/admin/`, separate from `/v1/*`. They
   perform real transitions: `InferenceService` validates the target
@@ -236,6 +247,39 @@ Environment variables can override YAML values for one-off runs:
 - `TEMPERATURE_DEFAULT`
 - `ENGINE`
 - `OLLAMA_HOST`
+
+## Streaming, discovery and reasoning (2026-08-03)
+
+- `POST /v1/chat/completions` with `"stream": true` returns Server-Sent
+  Events in OpenAI's chunk format, ending with `data: [DONE]`. New
+  `InferenceEngine.supports_streaming` + `chat_stream()`; `OllamaEngine`
+  implements it over the daemon's NDJSON `/api/chat`, `TransformersEngine`
+  returns `400` naming itself rather than faking an incremental path it
+  does not have.
+- `InferenceService.chat_stream()` is not a generator: it validates
+  eagerly and returns one, so rejections surface before the response
+  starts. From inside a generator they would arrive after the status code
+  was already sent. The returned generator holds the request slot for the
+  whole stream, so a lifecycle transition drains it.
+- Reasoning is separated from answers. Ollama supplies `message.thinking`
+  for well-behaved models; templates that leak it inline are split at the
+  `</think>` marker. In a stream the decision is made from `/api/show`
+  capabilities *before* the first token, since a stream cannot retract
+  what it sent. Non-reasoning models are unaffected - no per-model config.
+- `GET /v1/models` lists every selectable model (the `model.available`
+  catalog filtered to the active engine) with `loaded`/`pulled`/
+  `size_mib`/`fits` flags, so a frontend picker can grey out what is not
+  usable instead of offering choices that fail.
+- `services/gpu_safety.py` owns start-time GPU policy:
+  `GPUSafetyService.evaluate_start()` returns a `StartDecision`
+  (`proceed`/`confirm`/`refuse`) that the CLI renders. Per-process VRAM
+  attribution means our own resident model never blocks a start.
+- `./backend gpu pin-free` restarts the Ollama daemon pinned to the fewest
+  free GPUs that fit the model, chosen fresh each run.
+- `api.py` builds its `InferenceService` behind a FastAPI dependency
+  instead of at import, so importing the module no longer loads a model;
+  `app.py` triggers construction at startup so server behaviour is
+  unchanged. `tests/test_api.py` covers the HTTP layer behaviourally.
 
 ## Compatibility
 

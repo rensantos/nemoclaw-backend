@@ -114,7 +114,8 @@ milestones, not merely passing tests.
 - Risky phases involving runtime state, GPU memory, process management, or
   active requests need a design document in `docs/` before implementation.
 - Never fake unavailable functionality. Report it clearly, as
-  `BenchmarkService.first_token_latency` does while streaming is unavailable.
+  `BenchmarkService.first_token_latency` does when a stream produces only
+  reasoning and there is no answer latency to report.
 - Do not overwrite `requirements.txt` with `pip freeze`; it is
   human-maintained direct runtime dependencies only.
 - Every completed increment or phase ends with: run the full test suite,
@@ -136,7 +137,9 @@ Completed through Phase 4:
 - `ModelManager`, `GPUManager`, `BenchmarkService`
 - model, GPU, and benchmark CLI commands
 
-Phase 5 Increment 1 (state reporting only, no load/unload/switch):
+Phase 5 Increment 1 (state reporting only, no load/unload/switch) —
+**superseded by Increment 3 below; `lifecycle_state` is no longer fixed at
+`ready`. Historical record only:**
 
 - `LifecycleState` enum in `services/lifecycle.py`: `unloaded`, `loading`,
   `ready`, `unloading`, `switching`, `degraded`. Matches the state set and

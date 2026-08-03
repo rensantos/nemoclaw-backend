@@ -348,7 +348,7 @@ to a specific inference engine.
 Phase 4 does not implement Prometheus, Grafana, dashboards, continuous
 monitoring, distributed benchmarking, or a load-testing framework. Concurrency
 is accepted in command options for API stability, but requests are still run
-sequentially. First-token latency remains unavailable until streaming exists.
+sequentially. First-token latency is measured over a real SSE stream, excluding reasoning deltas from the metric.
 
 ## Model Lifecycle (Phase 5)
 

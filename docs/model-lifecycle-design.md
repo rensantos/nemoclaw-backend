@@ -283,9 +283,13 @@ traffic and `/v1/*` compatibility guarantees never apply to them:
 Core callers). They are not OpenAI-compatible and carry no API stability
 guarantee beyond this document.
 
-### Increment 2: Command Surface (Stubs)
+### Increment 2: Command Surface (Stubs) — superseded
 
-Phase 5 Increment 2 establishes this endpoint surface and the corresponding
+**Superseded by Increment 3 below, which made these endpoints real. The
+fixed `501` body and its helpers no longer exist. Retained as a record of
+what Increment 2 shipped:**
+
+Phase 5 Increment 2 established this endpoint surface and the corresponding
 CLI commands without implementing any lifecycle behavior:
 
 - For a well-formed request, each `/admin/model/*` endpoint returns HTTP
@@ -425,19 +429,29 @@ observed result.
 
 ## Streaming Assumptions
 
-Streaming is not implemented yet.
+**Streaming now exists (2026-08-03) and integrates with this accounting as
+required below.** The state machine was implemented first, as this section
+asked, so streaming reuses the same drain model rather than inventing a
+second one.
 
-This design assumes each active request is a bounded non-streaming request that
-can be counted, drained, or rejected. A future streaming phase must integrate
-with the same active request accounting:
+The requirements and how they are met:
 
-- active streams count as active requests.
-- lifecycle transitions stop accepting new streams.
-- existing streams are drained until completion or timeout.
-- timeout closes remaining streams with a controlled error if possible.
-
-The lifecycle state machine should be implemented before streaming so streaming
-does not create a second request-drain model.
+- *active streams count as active requests* — `InferenceService.chat_stream()`
+  holds the `_serving()` slot for the whole generator, not just its creation.
+- *lifecycle transitions stop accepting new streams* — `chat_stream()`
+  rejects eagerly when `lifecycle_state` is not `ready`. It is deliberately
+  not a generator, so the rejection surfaces before the response starts;
+  from inside a generator it would arrive after the status code was already
+  sent.
+- *existing streams are drained until completion or timeout* — a transition
+  blocks in `_drain()` until in-flight streams finish, covered by a test
+  that asserts a switch waits for an open stream.
+- *timeout closes remaining streams with a controlled error if possible* —
+  **not implemented.** Past the drain timeout the transition proceeds and
+  logs a warning; an already-open stream is left to finish on its own
+  rather than being torn down. Acceptable while transitions are fast and
+  single-operator, but it is the one clause of this section still
+  outstanding.
 
 ## Minimal Implementation Plan
 

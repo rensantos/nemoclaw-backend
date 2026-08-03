@@ -33,8 +33,11 @@
 
 - Add clearer validation for unsupported request fields if Nemoclaw clients
   start sending more OpenAI parameters.
-- Consider implementing streaming later if the client needs token-by-token
-  responses.
+- ~~Consider implementing streaming later~~ **Done (2026-08-03).** SSE on
+  `POST /v1/chat/completions` when `"stream": true`. One clause of
+  `docs/model-lifecycle-design.md`'s Streaming Assumptions is still
+  outstanding: past the drain timeout an open stream is left to finish
+  rather than being closed with a controlled error.
 - Add response timing metadata only if it remains outside the OpenAI-compatible
   response body or is explicitly accepted by clients.
 - Add future engines behind `InferenceEngine` only when a phase explicitly calls
@@ -54,7 +57,9 @@
   behavior should build on `ModelManager` without moving inference logic into it.
 - Implement real concurrent benchmark execution when needed. Phase 4 accepts
   `--concurrency` but still runs requests sequentially.
-- Implement first-token latency only after streaming responses exist.
+- ~~Implement first-token latency only after streaming responses exist.~~
+  **Done (2026-08-03)**, measured over a real stream with reasoning
+  deltas excluded from the metric.
 - GPU selection, multi-GPU scheduling, MIG support, CUDA affinity, and
   monitoring dashboards remain future work.
 

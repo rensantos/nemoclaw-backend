@@ -378,10 +378,20 @@ The `backend` command uses Typer. The `llm` Conda environment must include
 python -c "import typer; print(typer.__version__)"
 ```
 
-## Streaming Is Not Implemented
+## Streaming (resolved 2026-08-03)
 
-`stream: true` requests return a `400` response. The endpoint accepts the field
-for OpenAI-style request compatibility, but streaming output is future work.
+`stream: true` now returns Server-Sent Events per OpenAI convention. It
+previously returned `400` unconditionally.
+
+Still true: `400` is returned when the **active engine** cannot stream.
+`TransformersEngine` generates a whole response in one call, so it has no
+incremental path and says so rather than faking one.
+
+Known limitation: for a model whose chat template leaks reasoning inline
+(`qwen3:30b`), the reasoning prefix cannot stream incrementally — it is
+buffered until the `</think>` marker proves where reasoning ends, because a
+stream cannot retract tokens it has already sent. The answer after the
+marker streams normally.
 
 ## Benchmarks Require A Running Backend
 
