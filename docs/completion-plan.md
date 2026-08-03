@@ -1,116 +1,81 @@
 # Completion Plan
 
-Written 2026-08-03, at `nemoclaw-backend` v0.6.0. This is the plan to
-**finish the Nemoclaw project**, not just the backend.
+Originally written 2026-08-03 at v0.6.0. **Updated end of 2026-08-03**
+after Steps 1-3 were built and live-validated; the sections below are
+rewritten to match reality rather than left describing a finished plan as
+pending.
 
-The headline: **the backend is feature-complete for inference. Almost all
-remaining work is in the frontend**, which uses none of what was built on
-2026-08-03. Do not add backend surface without first checking the frontend
-needs it.
+The headline still holds: **the backend is feature-complete for
+inference, and the remaining work is mostly frontend and operational.**
+Do not add backend surface without first checking the frontend needs it.
 
 ## Where things actually stand
 
 | | State |
 |---|---|
-| `nemoclaw-backend` | v0.6.0, 302 tests, no `partial` endpoints, live on UBI serving `qwen3:30b` |
-| `nemoclaw-research-assistant` | commit `08b5ee4` — still non-streaming, ignores the new model flags, node choice still two hand-synced `.env` settings |
+| `nemoclaw-backend` | 341 tests, no `partial` endpoints, live on UBI serving `qwen3:30b` |
+| `nemoclaw-research-assistant` | streaming, node selection, model picker, `/doctor`, `/pull` - all live-validated |
 
-The frontend's `OpenAICompatibleProvider.chat()` explicitly **pops `stream`
-off its kwargs and discards it**, and `models()` returns bare ids,
-throwing away the `loaded`/`pulled`/`size_mib`/`fits` fields added for a
-picker. Both verified by reading the source, not assumed.
+Three nodes are configured and reachable: `local` (its own backend on
+:8001 over local Ollama), `ubi` (over VPN + one SSH tunnel), and `claude`
+(native Anthropic provider - authenticates, but the account has no
+credits, so it has never completed a real paid request).
 
-One thing already works with no frontend change: the reasoning fix. The
-provider reads `choices[0].message.content`, which the backend now
-guarantees is the answer alone.
+## Steps 1-3 - DONE (2026-08-03)
 
----
+- **Streaming** end to end, with a reasoning model's hidden thinking shown
+  live in its own Telegram message and never persisted to history or the
+  markdown export.
+- **Model picker**: `/models` lists what is genuinely installed (numbered,
+  selectable by number), `/pull` lists what could be downloaded and
+  refuses on insufficient disk.
+- **Node selection**: one `/node` choice, `NEMOCLAW_LOCAL_OLLAMA_HOST`
+  pinning helper models locally so only ONE tunnel is needed for UBI.
 
-## Step 1 — Frontend streaming
+Built beyond the original plan: `/doctor`, `scripts/setup.sh`, a committed
+SearXNG setup, `ubi_connect.sh`/`ubi_disconnect.sh`, a native
+`AnthropicProvider`, `GET /resources`, and `POST /admin/model/pull` with
+hard disk-safety refusal.
 
-**Why first:** the largest user-visible improvement. A 400-token answer
-currently arrives after one long pause.
+## What is next
 
-**Where:** `nemoclaw-research-assistant/scripts/providers/`.
+The frontend's `docs/NEXT_SESSION.md` is the working task list. In short,
+highest value first:
 
-**The catch:** `base.py`'s `LLMProvider` has no streaming method. Adding
-one to `openai_compatible_provider.py` alone breaks the abstraction —
-`ollama_provider.py` must implement it too (Ollama's native NDJSON, which
-the backend already wraps; mirror `OllamaEngine._post_stream`).
+1. **Use the assistant for real and fix what breaks.** Every bug found on
+   2026-08-03 came from live use, none from the test suites. `/rag`,
+   `/evidence`, `/literature`, `/hybrid`, PDF upload and `/metrics` have
+   had zero live exercise.
+2. **Make the bot and local backend survive a reboot** - both are plain
+   `nohup` processes today, with no cron or systemd entry.
+3. **Project-scoped chat memory** (`/project <name>`), designed in
+   `NEMOCLAW_SETUP.md`.
+4. **Claude credits**, so that provider gets its first real verification.
 
-**Acceptance:**
-- A `chat_stream()` (or equivalent) on the base class, implemented by both
-  providers.
-- The OpenAI-compatible one parses `data: {...}` SSE and stops at
-  `data: [DONE]`.
-- `delta.reasoning` is kept separate from `delta.content` — do not
-  concatenate them, or the reasoning fix is undone at the client.
-- Token counts read off the final chunk's `usage`.
-- The Telegram path streams or, if editing messages live is impractical,
-  at minimum uses streaming to show progress.
-- `scripts/test_llm_provider.py` extended to cover it.
+### Backend-side, only on a real caller
 
-## Step 2 — Model picker from `/v1/models`
-
-**Why:** the backend already returns everything needed; the frontend
-discards it. Small change, immediately useful.
-
-**Acceptance:**
-- `models()` returns the full objects, not just ids.
-- The UI (Telegram command) lists models and marks unusable ones —
-  `pulled: false` cannot be selected, `fits: false` warns.
-- Selecting one calls `POST /admin/model/switch` with `"persist": true`.
-  **Persist matters:** the backend sizes `gpu pin-free` from
-  `config.model.id`, so an unpersisted switch leaves that stale.
-- A `409 model_unavailable` or `404 model_not_configured` is shown to the
-  user, not swallowed.
-
-## Step 3 — Node selection (Local vs UBI)
-
-**Why:** the largest item and the longest-standing want. Currently two
-static `.env` choices that must be kept consistent by hand.
-
-**The hard part** (see `NEMOCLAW_SETUP.md`'s "Future development"
-section): there are **two independent wiring paths**, and one choice must
-drive both —
-
-1. the chat/Telegram path via `scripts/providers/` (OpenAI-compatible HTTP)
-2. every subprocess script (`/deepweb`, `/evidence`, `/literature`) which
-   talks **native Ollama** via `PROJECT_OLLAMA_HOST`, bypassing the
-   backend entirely
-
-**Constraint:** the backend has no auth and binds `127.0.0.1`, so UBI is
-reached through `ssh -L 8000:127.0.0.1:8000 ubi-a4000`. Supporting both
-nodes at once means **two tunnels on different local ports**, not one.
-
-**Acceptance:**
-- One user-facing choice (per session or per request) that both paths obey.
-- Per-node model and `num_ctx` defaults, since the nodes have different
-  models and context windows.
-- Clear failure when the chosen node's tunnel is down — not a hang.
-- Decide explicitly whether this needs the backend's deferred **Backend
-  Registry**, or whether frontend-side config is enough. Registry work
-  should not start until that question is answered.
-
-## Step 4 — Optional: reasoning panel
-
-Pure upside. Surface the `reasoning` field behind a toggle so the user can
-see a model's thinking without it polluting the answer. Skip if time is
-short; the frontend is already correct without it.
-
-## Step 5 — Backend odds and ends, only if wanted
-
-None of these is required for a working assistant:
-
-- **The one unmet Streaming Assumptions clause**: past the drain timeout an
+- **`/v1/embeddings`** is the one thing that would let the research
+  subprocess scripts stop calling Ollama directly - the last
+  Core-talks-to-runtime violation. Tracked in `docs/future-tasks.md`.
+  Not urgent: embeddings are pinned local and work.
+- **The unmet Streaming Assumptions clause**: past the drain timeout an
   open stream is left to finish rather than closed with a controlled
   error. Fine while transitions are fast and single-operator.
-- **Seven `planned` endpoints**: `/lifecycle`, `/capabilities`, `/gpu`,
+- **Six remaining `planned` endpoints**: `/lifecycle`, `/capabilities`,
   `/engines`, `/metrics`, `/benchmarks`, `/v1/completions`. Build only on
-  a real caller.
+  a real caller. (`/gpu` is effectively superseded by `/resources`.)
 - **Worker supervision**, which would unlock `TransformersEngine`
   lifecycle and side-by-side switching. Unnecessary while Ollama is the
   deployment.
+
+### Versioning
+
+`v0.7.0` is the current backend tag. The original 1.0 trigger - "the
+frontend actually consumes streaming and the `/v1/models` flags" - is now
+met, so 1.0 is unblocked on its own terms. Deliberately **not** tagged
+yet: 2026-08-03 surfaced a long run of bugs that only real use exposed,
+and `AGENTS.md`'s own rule is that tags mark validated runtime
+milestones. Revisit after task 1 above.
 
 ---
 
@@ -126,7 +91,15 @@ None of these is required for a working assistant:
 - **Live-validate on real hardware.** Every session so far has found bugs
   that unit tests passed over — pre-flight degradation, a lost
   `serve.log`, GPU UUIDs, a streaming rejection that could never have
-  produced its status code.
+  produced its status code. 2026-08-03 added six more, all found by a
+  person using the bot and none by the suites: a long-running process
+  ignoring `/node` because config was frozen at import; `/deepweb` and
+  `/web` validating a stale per-role model against the wrong daemon;
+  `/web` skipping its own fallback because the CLI was absent rather than
+  failing; `/models` listing six absent models while hiding two installed
+  ones; `/model` failing only on the persist path, because a lenient test
+  fake hid a second catalog check; and `register_model()` deleting 114
+  comment lines from `config.yaml`. Assume the untested paths hold more.
 
 ## Not on the critical path
 
