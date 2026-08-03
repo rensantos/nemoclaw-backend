@@ -499,6 +499,40 @@ paths:
               schema:
                 $ref: "#/components/schemas/HTTPValidationError"
 
+  /resources:
+    get:
+      tags: [native-management]
+      summary: Host resources (disk, RAM, VRAM)
+      operationId: getResources
+      x-implementation-status: implemented
+      x-current-behavior: |
+        Reports what this machine physically has, so a client can decide
+        whether a model can be downloaded here at all and whether it could
+        then run. Added when the frontend gained per-node model
+        downloading: disk is the binding constraint on a shared box, and
+        it was the one resource nothing owned (GPUManager covers GPUs
+        only; services/resources.py's HostResourceService owns disk and
+        system RAM).
+
+        "disk" measures the filesystem that would actually receive a
+        download - for OllamaEngine, the running daemon's own
+        OLLAMA_MODELS, read from its environment rather than assumed.
+
+        System RAM is reported because it constrains more than it looks:
+        Ollama sizes context against system RAM, not combined VRAM, so a
+        box with ample VRAM can still refuse a large context.
+
+        Any reading that cannot be determined is null, never 0. On a
+        shared machine "unknown free space" and "no free space" must not
+        look the same to a caller about to download tens of gigabytes.
+      responses:
+        "200":
+          description: Point-in-time host resource snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourcesResponse"
+
   /capabilities:
     get:
       tags: [native-management]
@@ -1076,6 +1110,49 @@ components:
         lifecycle_state:
           $ref: "#/components/schemas/LifecycleState"
           description: State at the time the error was returned.
+
+    ResourcesResponse:
+      type: object
+      description: |
+        Host resources. Every numeric field is nullable and null means
+        "could not be determined", never zero.
+      properties:
+        disk:
+          nullable: true
+          type: object
+          description: The filesystem that would receive a model download.
+          properties:
+            path:
+              type: string
+              description: Measured path (the engine's model storage).
+            total_mib: { type: integer, nullable: true }
+            free_mib: { type: integer, nullable: true }
+            used_percent: { type: number, nullable: true }
+        memory:
+          nullable: true
+          type: object
+          description: System RAM, from /proc/meminfo.
+          properties:
+            total_mib: { type: integer, nullable: true }
+            available_mib:
+              type: integer
+              nullable: true
+              description: >-
+                Kernel MemAvailable - what a new workload could actually
+                get, which is much closer to the truth than MemFree.
+        gpus:
+          type: array
+          description: Per-GPU VRAM. Empty when no GPU manager is available.
+          items:
+            type: object
+            properties:
+              index: { type: string }
+              name: { type: string, nullable: true }
+              memory_total_mib: { type: integer, nullable: true }
+              memory_used_mib: { type: integer, nullable: true }
+              memory_free_mib: { type: integer, nullable: true }
+        total_vram_mib: { type: integer, nullable: true }
+        free_vram_mib: { type: integer, nullable: true }
 
     CapabilitiesResponse:
       type: object

@@ -187,6 +187,31 @@ def daemon_launch_spec(pid: int):
     return argv, env
 
 
+def daemon_models_path() -> Optional[str]:
+    """Where the running daemon stores model blobs.
+
+    Read from the daemon's own environment rather than assumed, for the
+    same reason daemon_launch_spec does: the deployed daemon sets
+    OLLAMA_MODELS at launch and has drifted from the documented setup
+    before. Falls back to Ollama's documented default only when the
+    daemon is readable but sets nothing; returns None when there is no
+    daemon to ask, so a caller reports "unknown" rather than checking
+    free space on an unrelated filesystem.
+    """
+    for pid in find_daemon_pids():
+        spec = daemon_launch_spec(pid)
+        if spec is None:
+            continue
+        _, env = spec
+        configured = env.get("OLLAMA_MODELS")
+        if configured:
+            return configured
+        home = env.get("HOME")
+        if home:
+            return os.path.join(home, ".ollama", "models")
+    return None
+
+
 def daemon_log_path(pid: int) -> Optional[str]:
     """Where a running daemon's stdout goes, from /proc/<pid>/fd/1.
 
@@ -297,6 +322,10 @@ class OllamaEngine(InferenceEngine):
         """The daemon and its model-runner children (see
         find_runtime_pids); their VRAM is ours and reclaimable."""
         return find_runtime_pids()
+
+    def model_storage_path(self) -> Optional[str]:
+        """Where the daemon keeps blobs - the filesystem a pull fills."""
+        return daemon_models_path()
 
     def model_disk_size_mib(self, model_id: Optional[str] = None) -> Optional[int]:
         """On-disk size of a tag from GET /api/tags, or None if unknown."""

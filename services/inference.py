@@ -12,6 +12,7 @@ from engines.base import (
     ModelUnavailableError,
 )
 from services.gpu import GPUManager
+from services.resources import HostResourceService
 from services.lifecycle import (
     LifecycleConflictError,
     LifecycleState,
@@ -159,6 +160,17 @@ class InferenceService:
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED
                 raise
+
+    def host_resources(self):
+        """Disk, RAM and VRAM for the machine actually serving.
+
+        Lives on the service rather than in the route because it needs the
+        engine (for where models are stored) and the GPU manager, and the
+        route is a delivery surface that owns neither.
+        """
+        return HostResourceService(
+            gpu_manager=self.gpu_manager, engine=self.engine
+        ).snapshot()
 
     def chat_stream(
         self, messages, max_tokens, temperature, requested_model=None, think=None

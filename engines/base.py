@@ -123,6 +123,15 @@ class InferenceEngine(ABC):
         """
         return None
 
+    def model_storage_path(self) -> Optional[str]:
+        """Where this engine stores model weights on disk.
+
+        Lets resource reporting answer "is there room to download this?"
+        against the filesystem that would actually receive the download.
+        None means unknown, which callers must not treat as "anywhere".
+        """
+        return None
+
     def runtime_pids(self) -> List[int]:
         """PIDs that may hold GPU memory on this engine's behalf.
 

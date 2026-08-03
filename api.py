@@ -60,6 +60,42 @@ def models(service=Depends(get_inference_service)):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+@router.get("/resources")
+def resources(service=Depends(get_inference_service)):
+    """Disk, system RAM and per-GPU VRAM for this node.
+
+    Exists so a client can tell, before asking for anything, whether a
+    model can be downloaded here at all and whether it could then run.
+    Unknown readings are reported as null rather than 0 - on a shared
+    machine "unknown free space" and "no free space" must not look the
+    same to whoever is deciding to download 20GB.
+    """
+    snapshot = service.host_resources()
+    return {
+        "disk": (
+            None
+            if snapshot.disk is None
+            else {
+                "path": snapshot.disk.path,
+                "total_mib": snapshot.disk.total_mib,
+                "free_mib": snapshot.disk.free_mib,
+                "used_percent": snapshot.disk.used_percent,
+            }
+        ),
+        "memory": (
+            None
+            if snapshot.memory is None
+            else {
+                "total_mib": snapshot.memory.total_mib,
+                "available_mib": snapshot.memory.available_mib,
+            }
+        ),
+        "gpus": snapshot.gpus,
+        "total_vram_mib": snapshot.total_vram_mib,
+        "free_vram_mib": snapshot.free_vram_mib,
+    }
+
+
 def _sse_chunks(deltas, completion_id: str, model_id: str):
     """Renders engine deltas as OpenAI-convention SSE.
 
