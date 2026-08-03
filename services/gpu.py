@@ -325,8 +325,24 @@ class GPUManager:
                 value = entry.split("=", 1)[1].strip()
                 if not value:
                     return []
-                return [part.strip() for part in value.split(",") if part.strip()]
+                return [
+                    self._resolve_device_index(part.strip())
+                    for part in value.split(",")
+                    if part.strip()
+                ]
         return all_indexes
+
+    def _resolve_device_index(self, device: str) -> str:
+        """CUDA_VISIBLE_DEVICES accepts GPU UUIDs as well as indexes, and
+        Ollama passes UUIDs to its model runners. Left unresolved, a UUID
+        would match no index and quietly make every visibility check pass.
+        """
+        if device.isdigit():
+            return device
+        for parts in self._nvidia_smi("--query-gpu=index,uuid", expected_fields=2):
+            if parts[1] == device:
+                return parts[0]
+        return device
 
     def unsafe_gpus_for_process(
         self,

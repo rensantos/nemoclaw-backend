@@ -598,3 +598,41 @@ class GPUSelectionTests(unittest.TestCase):
 
         with detect, procs:
             self.assertIsNone(manager.select_gpus_for(1000))
+
+
+class CudaVisibleDevicesUUIDTests(unittest.TestCase):
+    """CUDA_VISIBLE_DEVICES accepts UUIDs as well as indexes - Ollama
+    passes UUIDs to its model runners. An unresolved UUID matches no index
+    and would silently make every visibility check pass."""
+
+    def _manager(self, env_value):
+        manager = GPUManager(FakeConfig())
+        return manager, mock.patch(
+            "builtins.open",
+            mock.mock_open(
+                read_data="CUDA_VISIBLE_DEVICES={}\0".format(env_value).encode()
+            ),
+        )
+
+    def test_resolves_uuids_to_indexes(self):
+        manager, environ = self._manager("GPU-aaa,GPU-bbb")
+        rows = [["0", "GPU-aaa"], ["1", "GPU-bbb"], ["2", "GPU-ccc"]]
+
+        with environ, mock.patch.object(manager, "_nvidia_smi", return_value=rows), \
+                mock.patch.object(manager, "detect_gpus", return_value=[]):
+            self.assertEqual(manager.visible_gpu_indexes_for_process(1), ["0", "1"])
+
+    def test_plain_indexes_are_left_alone(self):
+        manager, environ = self._manager("2,3")
+
+        with environ, mock.patch.object(manager, "detect_gpus", return_value=[]):
+            self.assertEqual(manager.visible_gpu_indexes_for_process(1), ["2", "3"])
+
+    def test_unknown_uuid_is_preserved_not_dropped(self):
+        manager, environ = self._manager("GPU-unknown")
+
+        with environ, mock.patch.object(manager, "_nvidia_smi", return_value=[]), \
+                mock.patch.object(manager, "detect_gpus", return_value=[]):
+            self.assertEqual(
+                manager.visible_gpu_indexes_for_process(1), ["GPU-unknown"]
+            )
