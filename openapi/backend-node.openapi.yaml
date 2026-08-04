@@ -531,9 +531,11 @@ paths:
         download path would be a second download mechanism with different
         cache semantics that nothing currently needs.
 
-        Synchronous: the response arrives when the download completes. No
-        progress streaming, job id or cancellation - deliberately not
-        faked, and those belong with the deferred worker supervision.
+        Synchronous: the response arrives when the download completes,
+        which for a large model is tens of minutes. There is still no job
+        id or cancellation - those belong with the deferred worker
+        supervision - but progress is no longer invisible: poll
+        GET /admin/model/pull/status while this call is outstanding.
       requestBody:
         required: true
         content:
@@ -574,6 +576,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SimpleErrorResponse"
+
+  /admin/model/pull/status:
+    get:
+      tags: [native-management]
+      summary: Progress of the current or most recent download
+      operationId: getPullStatus
+      x-implementation-status: implemented
+      x-current-behavior: |
+        The polling half of POST /admin/model/pull. That call answers only
+        when the transfer is over, so without this a client cannot tell a
+        running download from a dead one - which is exactly what happened:
+        the Telegram frontend held one request for most of an hour on
+        deepseek-r1:14b and could show nothing while Ollama knew the byte
+        count throughout.
+
+        Answerable while the pull is still blocking its own caller: it
+        reads an in-memory snapshot, never the engine, so it neither waits
+        on nor disturbs the transfer. FastAPI serves sync endpoints from a
+        threadpool, so the blocked POST does not occupy this route.
+
+        Single-slot and not persisted. A node pulls one model at a time
+        (the disk gates assume it), and after a restart this reports
+        "idle" rather than a download that died with the process.
+
+        "total_bytes" covers the layers the daemon has announced so far,
+        not the model's eventual size - which is not knowable up front, see
+        docs/model-pull-design.md Section 3. On a multi-blob model the
+        total can grow and the percentage step back mid-download; reported
+        as measured rather than smoothed into a guess.
+      responses:
+        "200":
+          description: |
+            Always 200, including when nothing has ever been pulled
+            ("idle"): a poller asking whether anything is happening should
+            not have to treat "no" as an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullStatusResponse"
 
   /resources:
     get:
@@ -1207,6 +1248,55 @@ components:
           type: integer
           nullable: true
           description: Free disk before the download; null if undeterminable.
+
+    PullStatusResponse:
+      type: object
+      description: |
+        Progress of the current or most recent download. Byte counts are
+        the daemon's own, not a filesystem estimate.
+      properties:
+        active:
+          type: boolean
+          description: Whether a download is running right now.
+        model_id:
+          type: string
+          nullable: true
+          description: Null only before this node has ever pulled anything.
+        status:
+          type: string
+          description: >-
+            The daemon's own phase string ("pulling manifest", "pulling
+            <digest>", "verifying sha256 digest", "writing manifest",
+            "success"), or "idle" before any pull. Phases that carry no
+            byte count still move this, so a client showing only bytes
+            does not read them as a stall.
+        completed_bytes: { type: integer }
+        total_bytes:
+          type: integer
+          description: >-
+            Sum over the layers announced so far, not the model's eventual
+            size. Can grow mid-download on a multi-blob model.
+        percent:
+          type: number
+          nullable: true
+          description: Null while no total has been reported yet - never 0 as a stand-in.
+        layers:
+          type: integer
+          description: How many distinct blobs the total covers.
+        started_at: { type: number, nullable: true }
+        updated_at:
+          type: number
+          nullable: true
+          description: >-
+            Unix time of the last event. A client can compare it against
+            now to spot a transfer that has gone quiet.
+        finished_at: { type: number, nullable: true }
+        error:
+          type: string
+          nullable: true
+          description: >-
+            Why the last download stopped, including a disk refusal that
+            aborted it in flight. Null on success.
 
     ResourcesResponse:
       type: object

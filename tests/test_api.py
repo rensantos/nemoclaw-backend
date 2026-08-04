@@ -101,6 +101,13 @@ class FakeService:
     def switch_model(self, model_id, persist=False):
         return self._lifecycle("switch", model_id)
 
+    def pull_status(self):
+        self.calls.append(("pull_status", None))
+        return {"active": True, "model_id": "deepseek-r1:14b", "status": "pulling",
+                "completed_bytes": 450, "total_bytes": 900, "percent": 50.0,
+                "layers": 1, "started_at": 1.0, "updated_at": 2.0,
+                "finished_at": None, "error": None}
+
 
 @unittest.skipUnless(API_TESTABLE, SKIP_REASON)
 class ApiRequestTests(unittest.TestCase):
@@ -343,6 +350,17 @@ class ApiRequestTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"], "model_unavailable")
+
+    def test_pull_status_is_readable_as_a_plain_get(self):
+        """The POST that starts a download does not answer until it ends,
+        so this is the only way a caller can see one running."""
+        response = self.client.get("/admin/model/pull/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["active"])
+        self.assertEqual(body["model_id"], "deepseek-r1:14b")
+        self.assertEqual(body["percent"], 50.0)
 
     def test_engine_without_lifecycle_support_is_501(self):
         from engines.base import LifecycleNotSupportedError

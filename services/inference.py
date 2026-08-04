@@ -24,6 +24,7 @@ from services.lifecycle import (
     validate_transition,
 )
 from services.model import ModelManager
+from services.pull_progress import PullProgress
 
 _logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class InferenceService:
         self._active_requests = 0
         self._requests = threading.Condition()
         self._transition_lock = threading.Lock()
+        self.pull_progress = PullProgress()
         self._warn_if_gpu_busy()
         self.engine.load_model()
         self.lifecycle_state = LifecycleState.READY
@@ -237,7 +239,19 @@ class InferenceService:
                     free_mib=free_mib,
                 )
 
-        total_bytes = self.engine.pull_model(model_id, size_guard=guard)
+        # Started only once the pre-flight floor has passed, so a refusal
+        # that never touched the network is not published as a download
+        # that failed. An in-flight refusal by `guard` is a real aborted
+        # transfer and is recorded as one.
+        self.pull_progress.start(model_id)
+        try:
+            total_bytes = self.engine.pull_model(
+                model_id, size_guard=guard, on_progress=self.pull_progress.record
+            )
+        except BaseException as exc:
+            self.pull_progress.finish(error=exc)
+            raise
+        self.pull_progress.finish()
 
         registered = False
         if self.model_manager is not None:
@@ -256,6 +270,15 @@ class InferenceService:
             "registered": registered,
             "free_mib_before": free_mib,
         }
+
+    def pull_status(self):
+        """How far along the current (or most recent) download is.
+
+        Answerable while pull_model is still blocking its own caller: it
+        reads a snapshot rather than the engine, so it never waits on the
+        transfer it describes.
+        """
+        return self.pull_progress.snapshot()
 
     def _storage_path(self):
         try:

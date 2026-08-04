@@ -311,6 +311,22 @@ def admin_model_pull(
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+@router.get("/admin/model/pull/status")
+def admin_model_pull_status(service=Depends(get_inference_service)):
+    """How far along the current (or most recent) download is.
+
+    Exists because the POST above does not answer until the transfer is
+    over - tens of minutes for a large model - so its caller has no way to
+    distinguish a running download from a dead one. This is the polling
+    side of that pair: GET while the POST is still open.
+
+    Always 200, including when nothing has ever been pulled ("idle"): a
+    poller asking "is anything happening" should not have to treat "no"
+    as an error.
+    """
+    return service.pull_status()
+
+
 @router.post("/admin/model/switch")
 def admin_model_switch(
     req: ModelLifecycleRequest, service=Depends(get_inference_service)

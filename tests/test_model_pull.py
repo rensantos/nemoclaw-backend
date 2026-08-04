@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from engines.base import InferenceEngine
+from engines.ollama_engine import OllamaEngine
 from services.inference import DISK_RESERVE_MIB, MINIMUM_FREE_MIB, InferenceService
 from services.lifecycle import InsufficientDiskError, PullNotSupportedError
 from services.resources import DiskInfo, HostResources
@@ -19,15 +20,25 @@ MIB = 1024 * 1024
 class FakeEngine(InferenceEngine):
     supports_pull = True
 
-    def __init__(self, total_bytes=None, error=None):
+    def __init__(self, total_bytes=None, error=None, events=None):
         self.model_id = "qwen3:30b"
         self.total_bytes = total_bytes
         self.error = error
+        self.events = events or []
+        # Called after each event is forwarded, so a test can look at the
+        # service mid-transfer - the only moment progress reporting is
+        # for, since the call itself returns when it is already over.
+        self.on_event = None
         self.pulled = []
         self.aborted = False
 
-    def pull_model(self, model_id, size_guard=None):
+    def pull_model(self, model_id, size_guard=None, on_progress=None):
         self.pulled.append(model_id)
+        for event in self.events:
+            if on_progress is not None:
+                on_progress(event)
+            if self.on_event is not None:
+                self.on_event()
         if self.error:
             raise self.error
         if self.total_bytes is not None and size_guard is not None:
@@ -222,6 +233,186 @@ class SizeReportingTests(unittest.TestCase):
         service = service_with(FakeEngine(total_bytes=None), 50000)
 
         self.assertIsNone(service.pull_model("quiet:7b")["size_mib"])
+
+
+class PullProgressTests(unittest.TestCase):
+    """Progress has to be readable *during* the transfer.
+
+    pull_model answers only when the download is over, so everything these
+    tests assert is sampled mid-flight, through the same snapshot the
+    status endpoint serves. A percentage that only appears at the end
+    would be worth nothing: the whole complaint it answers is an hour of
+    silence with no way to tell a running download from a hung one.
+    """
+
+    DIGEST = "sha256:6e9f90f02bb3"
+    EVENTS = [
+        {"status": "pulling manifest"},
+        {"status": "pulling 6e9f90f02bb3", "digest": DIGEST, "total": 900 * MIB, "completed": 100 * MIB},
+        {"status": "pulling 6e9f90f02bb3", "digest": DIGEST, "total": 900 * MIB, "completed": 450 * MIB},
+    ]
+
+    def _watched(self, engine, free_mib=50000):
+        service = service_with(engine, free_mib=free_mib)
+        snapshots = []
+        engine.on_event = lambda: snapshots.append(service.pull_status())
+        return service, snapshots
+
+    def test_nothing_pulled_yet_reports_idle_rather_than_erroring(self):
+        status = service_with(FakeEngine(), 50000).pull_status()
+
+        self.assertFalse(status["active"])
+        self.assertEqual(status["status"], "idle")
+        self.assertIsNone(status["percent"])
+
+    def test_bytes_and_percent_are_visible_mid_download(self):
+        engine = FakeEngine(total_bytes=900 * MIB, events=self.EVENTS)
+        service, snapshots = self._watched(engine)
+
+        service.pull_model("deepseek-r1:14b")
+
+        midway = snapshots[-1]
+        self.assertTrue(midway["active"])
+        self.assertEqual(midway["model_id"], "deepseek-r1:14b")
+        self.assertEqual(midway["completed_bytes"], 450 * MIB)
+        self.assertEqual(midway["total_bytes"], 900 * MIB)
+        self.assertEqual(midway["percent"], 50.0)
+
+    def test_a_phase_with_no_bytes_still_moves_the_status(self):
+        """'pulling manifest' and 'verifying sha256 digest' carry no byte
+        count; a caller shown only bytes would read them as a stall."""
+        engine = FakeEngine(total_bytes=900 * MIB, events=self.EVENTS)
+        service, snapshots = self._watched(engine)
+
+        service.pull_model("deepseek-r1:14b")
+
+        self.assertEqual(snapshots[0]["status"], "pulling manifest")
+        self.assertIsNone(snapshots[0]["percent"])
+
+    def test_cumulative_layer_counts_are_not_added_to_themselves(self):
+        """Ollama re-reports each layer's running total, so summing what
+        arrives would claim 550MiB downloaded when 450MiB has landed."""
+        engine = FakeEngine(total_bytes=900 * MIB, events=self.EVENTS)
+        service, snapshots = self._watched(engine)
+
+        service.pull_model("deepseek-r1:14b")
+
+        self.assertEqual(snapshots[-1]["completed_bytes"], 450 * MIB)
+
+    def test_separate_layers_are_summed(self):
+        engine = FakeEngine(
+            total_bytes=100 * MIB,
+            events=[
+                {"status": "pulling a", "digest": "sha256:a", "total": 100 * MIB, "completed": 100 * MIB},
+                {"status": "pulling b", "digest": "sha256:b", "total": 40 * MIB, "completed": 10 * MIB},
+            ],
+        )
+        service, snapshots = self._watched(engine)
+
+        service.pull_model("two-layer:7b")
+
+        self.assertEqual(snapshots[-1]["completed_bytes"], 110 * MIB)
+        self.assertEqual(snapshots[-1]["total_bytes"], 140 * MIB)
+        self.assertEqual(snapshots[-1]["layers"], 2)
+
+    def test_a_finished_download_reads_as_complete_and_inactive(self):
+        """The last event before success is routinely a few KiB short of
+        the total; leaving it there would report a finished download as
+        stalled at 99%."""
+        engine = FakeEngine(
+            total_bytes=900 * MIB,
+            events=[{"status": "pulling x", "digest": self.DIGEST, "total": 900 * MIB, "completed": 899 * MIB}],
+        )
+        service = service_with(engine, free_mib=50000)
+
+        service.pull_model("deepseek-r1:14b")
+        status = service.pull_status()
+
+        self.assertFalse(status["active"])
+        self.assertEqual(status["percent"], 100.0)
+        self.assertEqual(status["status"], "success")
+        self.assertIsNone(status["error"])
+        self.assertIsNotNone(status["finished_at"])
+
+    def test_a_failed_download_stops_being_active_and_keeps_the_reason(self):
+        engine = FakeEngine(error=RuntimeError("manifest not found"), events=self.EVENTS)
+        service = service_with(engine, free_mib=50000)
+
+        with self.assertRaises(RuntimeError):
+            service.pull_model("nope:1b")
+        status = service.pull_status()
+
+        self.assertFalse(status["active"])
+        self.assertIn("manifest not found", status["error"])
+
+    def test_an_in_flight_disk_refusal_is_recorded_as_a_failed_pull(self):
+        engine = FakeEngine(total_bytes=20000 * MIB)
+        service = service_with(engine, free_mib=8144)
+
+        with self.assertRaises(InsufficientDiskError):
+            service.pull_model("qwen3:32b")
+
+        self.assertFalse(service.pull_status()["active"])
+        self.assertIn("Refusing", service.pull_status()["error"])
+
+    def test_a_preflight_refusal_is_not_published_as_a_download(self):
+        """Nothing was transferred, so nothing should appear as one; the
+        caller already has the 507 explaining why."""
+        service = service_with(FakeEngine(total_bytes=MIB), free_mib=MINIMUM_FREE_MIB - 1)
+
+        with self.assertRaises(InsufficientDiskError):
+            service.pull_model("tiny:1b")
+
+        self.assertEqual(service.pull_status()["status"], "idle")
+        self.assertIsNone(service.pull_status()["model_id"])
+
+    def test_a_second_pull_does_not_inherit_the_first_ones_bytes(self):
+        engine = FakeEngine(total_bytes=900 * MIB, events=self.EVENTS)
+        service, snapshots = self._watched(engine)
+        service.pull_model("first:7b")
+
+        service.pull_model("second:7b")
+
+        first_event_of_second_pull = snapshots[3]
+        self.assertEqual(first_event_of_second_pull["model_id"], "second:7b")
+        self.assertEqual(first_event_of_second_pull["completed_bytes"], 0)
+
+
+class EngineProgressTests(unittest.TestCase):
+    """OllamaEngine's side of the same feature, exercised against the raw
+    event stream rather than the service."""
+
+    def _engine(self, events):
+        engine = OllamaEngine.__new__(OllamaEngine)
+        engine.base_url = "http://127.0.0.1:11434"
+        engine.model_id = "qwen3:4b"
+        engine._post_stream = lambda path, payload: iter(events)
+        return engine
+
+    def test_every_event_reaches_the_reporter(self):
+        seen = []
+        engine = self._engine(
+            [{"status": "pulling manifest"}, {"status": "pulling x", "total": 10, "completed": 4}]
+        )
+
+        engine.pull_model("x:1b", on_progress=seen.append)
+
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1]["completed"], 4)
+
+    def test_a_reporter_that_raises_does_not_abort_the_transfer(self):
+        """Nine gigabytes are not thrown away because a status line could
+        not be written."""
+        engine = self._engine([{"status": "pulling x", "total": 10, "completed": 4}] * 3)
+
+        def broken(event):
+            raise RuntimeError("telegram is down")
+
+        with self.assertLogs("engines.ollama_engine", level="WARNING") as logs:
+            total = engine.pull_model("x:1b", on_progress=broken)
+
+        self.assertEqual(total, 10)
+        self.assertEqual(len(logs.records), 1)  # dropped, not retried per event
 
 
 if __name__ == "__main__":

@@ -87,21 +87,48 @@ silently evicted the running model would be a surprise mid-conversation.
 
 ## 5. Progress
 
-The endpoint is synchronous and returns a summary when the pull finishes.
-Streaming pull progress to the client is deliberately out of scope for this
-increment: it needs the same eager-validation care as `chat_stream` (a
-refusal must be a real status code, not a dead connection mid-stream), and
-the value is cosmetic next to the safety gates. A long pull holds the
-request open; the frontend's own HTTP timeout governs.
+`POST /admin/model/pull` stays synchronous and returns its summary when the
+pull finishes. A long pull holds the request open; the frontend's own HTTP
+timeout governs.
 
-Not implemented, and not faked: no percentage callback, no resumable job
-id, no cancellation. If those are wanted later they belong with worker
-supervision, which is already deferred.
+Progress is **polled, not streamed**: `GET /admin/model/pull/status` reports
+the current byte count while the POST is still outstanding. Streaming the
+progress down the POST's own response was rejected for the reason it always
+was - it needs the same eager-validation care as `chat_stream`, where a
+refusal must arrive as a real status code and not as a dead connection
+mid-stream. A second, separately-addressable GET has neither problem: the
+refusal path is untouched, and the poll cannot corrupt a transfer it never
+touches.
+
+What made this stop being cosmetic: with no progress at all, a caller cannot
+distinguish a running download from a hung one. Observed live - the Telegram
+frontend pulling `deepseek-r1:14b` (9GB) held one request for most of an
+hour and could show the operator nothing, not even that bytes were moving,
+while the daemon had reported the byte count in every event throughout. The
+information already existed; only the route out was missing.
+
+Mechanics (`services/pull_progress.py`):
+
+- `OllamaEngine.pull_model` forwards each raw daemon event to an optional
+  `on_progress` callback. A callback that raises is dropped with one warning
+  and the transfer continues - nine gigabytes are not discarded because a
+  status line could not be written.
+- `PullProgress` keeps per-digest counts, because the daemon re-reports each
+  layer's *cumulative* bytes; summing arrivals would count the same bytes on
+  every event.
+- On success the layers are snapped to their totals: the last event before
+  `success` is routinely a few KiB short, and a final reading of 99% reads
+  as a stall.
+- In-memory and single-slot. A node pulls one model at a time, and progress
+  surviving a restart would describe a download that died with the process.
+
+Still not implemented, and still not faked: no resumable job id, no
+cancellation. Those belong with worker supervision, which remains deferred.
 
 ## 6. Non-goals
 
 - Pulling on a `TransformersEngine` backend (`501`).
 - Deleting models to make room.
 - Switching to the pulled model.
-- Streaming progress, job control, cancellation.
+- Streaming progress down the POST response, job control, cancellation.
 - Any pull path that bypasses the catalog.

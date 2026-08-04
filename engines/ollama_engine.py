@@ -328,7 +328,7 @@ class OllamaEngine(InferenceEngine):
         """Where the daemon keeps blobs - the filesystem a pull fills."""
         return daemon_models_path()
 
-    def pull_model(self, model_id: str, size_guard=None):
+    def pull_model(self, model_id: str, size_guard=None, on_progress=None):
         """Downloads a tag, streaming Ollama's own progress.
 
         `size_guard` is called with the total byte count as soon as the
@@ -336,6 +336,11 @@ class OllamaEngine(InferenceEngine):
         is genuinely not knowable before starting - this is the first
         point at which a caller can check it against free disk (see
         docs/model-pull-design.md Section 3).
+
+        `on_progress` is called with each raw progress event, for callers
+        that want to report a running download. This loop is the only
+        place the byte count exists: the call returns when the transfer is
+        already over, so anything not handed out here is lost.
 
         Returns the total bytes reported, or None if the daemon never
         reported one.
@@ -352,6 +357,19 @@ class OllamaEngine(InferenceEngine):
                         self.base_url, model_id, error
                     )
                 )
+            if on_progress is not None:
+                try:
+                    on_progress(event)
+                except Exception:
+                    # Reporting is a nicety; a broken reporter must not
+                    # abandon a transfer that is working. Dropped rather
+                    # than retried, so one bad callback cannot log once
+                    # per event for the rest of a 9GB download.
+                    _logger.warning(
+                        "Pull progress reporting failed; continuing without it",
+                        exc_info=True,
+                    )
+                    on_progress = None
             reported = event.get("total")
             if reported and not checked:
                 total_bytes = int(reported)

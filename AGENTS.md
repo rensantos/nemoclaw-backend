@@ -1114,9 +1114,25 @@ downloading, which needed two things this backend never had.
   the model deleted might be mid-experiment for someone else.
 - `supports_pull` (default `False`) gates it; `TransformersEngine` gets
   `501` rather than a second download path with different cache semantics.
-- Synchronous, with no progress streaming, job id or cancellation —
-  deliberately not faked; they belong with the deferred worker
-  supervision.
+- Synchronous, with no job id or cancellation — deliberately not faked;
+  they belong with the deferred worker supervision.
+- **`GET /admin/model/pull/status`** is the polling half of that pair
+  (`services/pull_progress.py`), added 2026-08-04 after a live 9GB
+  `deepseek-r1:14b` pull left the Telegram frontend holding one request
+  for most of an hour with nothing to show — it could not distinguish a
+  running download from a hung one, though the daemon had reported the
+  byte count in every event throughout. `OllamaEngine.pull_model` now
+  forwards each event to an optional `on_progress`; a callback that
+  raises is dropped with one warning rather than abandoning the transfer.
+  Counts are kept **per digest**, because the daemon re-reports each
+  layer's cumulative bytes and summing arrivals would count them again on
+  every event. Readable while the POST is still blocked: it reads an
+  in-memory snapshot, and FastAPI serves sync endpoints from a threadpool.
+  In-memory and single-slot — after a restart it reports `idle`, never a
+  download that died with the process. Progress is polled rather than
+  streamed down the POST's own response, which would need `chat_stream`'s
+  eager-validation care (a refusal must be a status code, not a dead
+  connection mid-stream); a separate GET has neither problem.
 
 Live-validated on UBI end to end: `qwen3:32b` (19265 MiB) refused with
 `507` against 8143 MiB free, transfer aborted with **nothing left on
