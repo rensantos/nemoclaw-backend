@@ -14,6 +14,7 @@ from engines.base import (
 from services.gpu import GPUManager
 from services.resources import HostResourceService
 from services.lifecycle import (
+    EmbeddingsNotSupportedError,
     InsufficientDiskError,
     LifecycleConflictError,
     LifecycleState,
@@ -100,6 +101,11 @@ class InferenceService:
         health["lifecycle_state"] = self.lifecycle_state.value
         health["loaded_model"] = self.loaded_model_id
         health["target_model"] = self.target_model_id
+        # Which machine answered. Every instance otherwise returns the same
+        # shape, so a client with several backends reachable at once (a
+        # local one plus SSH-tunnelled remotes) could not tell them apart
+        # except by guessing from the model or GPU name.
+        health["instance"] = settings.backend.instance
         return health
 
     def list_models(self):
@@ -187,6 +193,29 @@ class InferenceService:
                 return self.engine.chat(
                     messages, max_tokens, temperature, requested_model, think
                 )
+            except EngineUnavailableError:
+                self.lifecycle_state = LifecycleState.DEGRADED
+                raise
+
+    def embed(self, texts, model):
+        """Embedding vectors for texts, one per input, in order.
+
+        `model` names an *embedding* model and is deliberately unrelated
+        to the loaded chat model: it is not validated against it and does
+        not trigger a switch. The frontend's vectorstore is indexed with
+        one specific embedding model, so the caller - not this service -
+        owns that choice, and silently substituting a different model
+        would corrupt retrieval rather than fail.
+
+        Still goes through _serving(), so an embedding request counts as
+        in-flight work and is drained before a model transition, exactly
+        like chat.
+        """
+        if not self.engine.supports_embeddings:
+            raise EmbeddingsNotSupportedError(type(self.engine).__name__)
+        with self._serving():
+            try:
+                return self.engine.embed(texts, model)
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED
                 raise

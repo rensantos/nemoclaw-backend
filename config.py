@@ -1,4 +1,5 @@
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,11 @@ DEFAULTS = {
         "gpu": 0,
         "engine": "transformers",
         "ollama_host": "http://127.0.0.1:11434",
+        # Empty means "use this machine's hostname". Every backend instance
+        # otherwise answers /health with the same shape, so with several
+        # reachable at once (a local one plus an SSH-tunnelled remote)
+        # there is no way to tell which machine replied.
+        "instance": "",
     },
     "model": {
         "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
@@ -37,6 +43,7 @@ class BackendConfig:
     gpu: str
     engine: str
     ollama_host: str
+    instance: str
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,9 @@ def load_config() -> Config:
     ollama_host = _env_value(
         "OLLAMA_HOST", _section_value(raw_config, "backend", "ollama_host")
     )
+    instance = str(
+        _env_value("INSTANCE", _section_value(raw_config, "backend", "instance")) or ""
+    ).strip() or socket.gethostname()
     model_id = _env_value("MODEL_ID", _section_value(raw_config, "model", "id"))
     max_tokens_default = _int_env(
         "MAX_TOKENS_DEFAULT",
@@ -177,7 +187,12 @@ def load_config() -> Config:
 
     return Config(
         backend=BackendConfig(
-            host=host, port=port, gpu=gpu, engine=engine, ollama_host=ollama_host
+            host=host,
+            port=port,
+            gpu=gpu,
+            engine=engine,
+            ollama_host=ollama_host,
+            instance=instance,
         ),
         model=ModelConfig(
             id=model_id,

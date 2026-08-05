@@ -10,6 +10,7 @@ from engines.base import (
 )
 from services.inference import InferenceService
 from services.lifecycle import (
+    EmbeddingsNotSupportedError,
     LifecycleConflictError,
     LifecycleState,
     LifecycleUnavailableError,
@@ -20,6 +21,7 @@ from services.lifecycle import (
 class FakeEngine:
     supports_runtime_lifecycle = True
     supports_streaming = False
+    supports_embeddings = False
 
     def __init__(self, model_id="fake-model", runtime_pids=()):
         self.loaded = False
@@ -912,3 +914,56 @@ class StreamingTests(unittest.TestCase):
 
         self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
         self.assertEqual(service._active_requests, 0)  # slot still released
+
+
+class EmbeddingServiceTests(unittest.TestCase):
+    """Embeddings are a separate model from the loaded chat model, so the
+    service must not validate them against it or switch to serve them."""
+
+    class EmbeddingEngine(FakeEngine):
+        supports_embeddings = True
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.embed_calls = []
+
+        def embed(self, texts, model):
+            self.embed_calls.append((tuple(texts), model))
+            return [[0.5, 0.5] for _ in texts]
+
+    def test_embed_returns_one_vector_per_text_and_passes_the_model_through(self):
+        engine = self.EmbeddingEngine(model_id="qwen3:30b")
+        service = _lifecycle_service(engine)
+
+        vectors = service.embed(["a", "b"], "nomic-embed-text")
+
+        self.assertEqual(len(vectors), 2)
+        self.assertEqual(engine.embed_calls, [(("a", "b"), "nomic-embed-text")])
+        self.assertEqual(engine.model_id, "qwen3:30b", "must not switch the loaded model")
+
+    def test_embed_on_an_engine_without_support_raises_rather_than_crashing(self):
+        service = _lifecycle_service(FakeEngine())
+
+        with self.assertRaises(EmbeddingsNotSupportedError):
+            service.embed(["a"], "nomic-embed-text")
+
+    def test_embed_releases_its_serving_slot(self):
+        engine = self.EmbeddingEngine()
+        service = _lifecycle_service(engine)
+
+        service.embed(["a"], "nomic-embed-text")
+
+        self.assertEqual(service._active_requests, 0)
+
+    def test_engine_failure_during_embed_degrades_the_service(self):
+        class FailingEmbed(self.EmbeddingEngine):
+            def embed(self, texts, model):
+                raise EngineUnavailableError("daemon died")
+
+        service = _lifecycle_service(FailingEmbed())
+
+        with self.assertRaises(EngineUnavailableError):
+            service.embed(["a"], "nomic-embed-text")
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
+        self.assertEqual(service._active_requests, 0)

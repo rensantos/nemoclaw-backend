@@ -14,13 +14,19 @@ from engines.base import (
 )
 from services.inference import create_inference_service
 from services.lifecycle import (
+    EmbeddingsNotSupportedError,
     InsufficientDiskError,
     LifecycleConflictError,
     LifecycleUnavailableError,
     PullNotSupportedError,
     StreamingNotSupportedError,
 )
-from schemas import ChatCompletionRequest, GenerateRequest, ModelLifecycleRequest
+from schemas import (
+    ChatCompletionRequest,
+    EmbeddingRequest,
+    GenerateRequest,
+    ModelLifecycleRequest,
+)
 
 
 router = APIRouter()
@@ -223,6 +229,38 @@ def chat_completions(
             "completion_tokens": result["completion_tokens"],
             "total_tokens": result["total_tokens"],
         },
+    }
+
+
+@router.post("/v1/embeddings")
+def embeddings(req: EmbeddingRequest, service=Depends(get_inference_service)):
+    """OpenAI-compatible embeddings.
+
+    `model` is required here, unlike /v1/chat/completions where it falls
+    back to the loaded model: an embedding model is a separate model, and
+    defaulting to the chat model would return vectors that silently fail
+    to match a vectorstore built with a real embedding model.
+    """
+    texts = req.texts()
+    if not texts or any(not text.strip() for text in texts):
+        raise HTTPException(status_code=400, detail="input must not be empty")
+
+    try:
+        vectors = service.embed(texts, req.model)
+    except EmbeddingsNotSupportedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except ModelNotFoundError as exc:
+        return _model_not_found_response(exc)
+    except (EngineUnavailableError, LifecycleUnavailableError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return {
+        "object": "list",
+        "model": req.model,
+        "data": [
+            {"object": "embedding", "index": index, "embedding": vector}
+            for index, vector in enumerate(vectors)
+        ],
     }
 
 

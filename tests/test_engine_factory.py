@@ -26,6 +26,7 @@ def _make_config(
             gpu="0",
             engine=engine,
             ollama_host=ollama_host,
+            instance="test-instance",
         ),
         model=ModelConfig(
             id=model_id,
@@ -1063,3 +1064,105 @@ class OllamaStreamingTests(unittest.TestCase):
         self.assertEqual(
             "".join(d["content"] for d in deltas if "content" in d), "Lisbon"
         )
+
+
+class OllamaEngineEmbeddingTests(unittest.TestCase):
+    """embed() must not go through the requested-model check chat() uses:
+    an embedding model is a different model from the loaded chat model."""
+
+    def _engine(self, model_id="qwen3:30b"):
+        from engines.ollama_engine import OllamaEngine
+
+        return OllamaEngine(_make_config("ollama", model_id=model_id))
+
+    def test_uses_the_batch_endpoint_and_keeps_input_order(self):
+        engine = self._engine()
+        seen = {}
+
+        def fake_post(path, payload):
+            seen["path"], seen["payload"] = path, payload
+            return {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
+
+        with mock.patch.object(engine, "_post", side_effect=fake_post):
+            vectors = engine.embed(["first", "second"], "nomic-embed-text")
+
+        self.assertEqual(seen["path"], "/api/embed")
+        self.assertEqual(seen["payload"]["model"], "nomic-embed-text")
+        self.assertEqual(seen["payload"]["input"], ["first", "second"])
+        self.assertEqual(vectors, [[0.1, 0.2], [0.3, 0.4]])
+
+    def test_embedding_model_is_not_checked_against_the_loaded_model(self):
+        engine = self._engine(model_id="qwen3:30b")
+
+        with mock.patch.object(engine, "_post", return_value={"embeddings": [[1.0]]}):
+            engine.embed(["x"], "nomic-embed-text")  # must not raise ModelNotFoundError
+
+        self.assertEqual(engine.model_id, "qwen3:30b", "must not switch the loaded model")
+
+    def test_falls_back_to_the_legacy_single_embedding_endpoint(self):
+        """Older daemons expose /api/embeddings ({"prompt"} -> {"embedding"})
+        and 404 the batch route; the frontend hits the same split."""
+        engine = self._engine()
+        paths = []
+
+        def fake_post(path, payload):
+            paths.append(path)
+            if path == "/api/embed":
+                raise EngineUnavailableError("404 from an older daemon")
+            return {"embedding": [0.7, 0.8]}
+
+        with mock.patch.object(engine, "_post", side_effect=fake_post):
+            vectors = engine.embed(["only"], "nomic-embed-text")
+
+        self.assertEqual(paths, ["/api/embed", "/api/embeddings"])
+        self.assertEqual(vectors, [[0.7, 0.8]])
+
+    def test_an_unpulled_embedding_model_is_model_not_found_not_unavailable(self):
+        """Ollama answers 404 "try pulling it first" from a perfectly healthy
+        daemon. _request() collapses every HTTP error into
+        EngineUnavailableError, which would surface as 503 and send the
+        caller debugging their daemon instead of pulling the model."""
+        engine = self._engine()
+
+        def fake_post(path, payload):
+            raise EngineUnavailableError("HTTP Error 404: Not Found")
+
+        with mock.patch.object(engine, "_post", side_effect=fake_post):
+            with mock.patch.object(engine, "_get_tags", return_value={"models": [{"name": "qwen3:30b"}]}):
+                with self.assertRaises(ModelNotFoundError) as caught:
+                    engine.embed(["x"], "nomic-embed-text")
+
+        self.assertEqual(caught.exception.requested_model, "nomic-embed-text")
+
+    def test_a_genuinely_down_daemon_still_reports_unavailable(self):
+        """The counterpart: when the tag lookup fails too, the daemon really
+        is down and 503 must stand rather than being relabelled a 404."""
+        engine = self._engine()
+
+        with mock.patch.object(engine, "_post", side_effect=EngineUnavailableError("refused")):
+            with mock.patch.object(engine, "_get_tags", side_effect=EngineUnavailableError("refused")):
+                with self.assertRaises(EngineUnavailableError):
+                    engine.embed(["x"], "nomic-embed-text")
+
+    def test_empty_input_makes_no_request(self):
+        engine = self._engine()
+
+        with mock.patch.object(engine, "_post") as post:
+            self.assertEqual(engine.embed([], "nomic-embed-text"), [])
+
+        post.assert_not_called()
+
+    def test_a_short_batch_response_falls_back_rather_than_misaligning(self):
+        """Fewer vectors than inputs would silently pair text with the wrong
+        vector, so it must not be accepted."""
+        engine = self._engine()
+
+        def fake_post(path, payload):
+            if path == "/api/embed":
+                return {"embeddings": [[0.1]]}  # 1 vector for 2 inputs
+            return {"embedding": [0.9]}
+
+        with mock.patch.object(engine, "_post", side_effect=fake_post):
+            vectors = engine.embed(["a", "b"], "nomic-embed-text")
+
+        self.assertEqual(vectors, [[0.9], [0.9]])

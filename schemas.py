@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -28,6 +28,19 @@ class GenerateRequest(BaseModel):
     max_new_tokens: int = settings.max_tokens_default
     temperature: float = settings.temperature_default
     think: Optional[bool] = None
+
+
+class EmbeddingRequest(BaseModel):
+    # Required, unlike ChatCompletionRequest.model which falls back to the
+    # loaded model. There is no sensible default here: the loaded model is
+    # a chat model, and embedding text with it would return vectors that
+    # silently do not match a vectorstore built with a real embedding
+    # model. Better to reject than to corrupt retrieval.
+    model: str
+    input: Union[str, List[str]]
+
+    def texts(self) -> List[str]:
+        return [self.input] if isinstance(self.input, str) else list(self.input)
 
 
 class ModelLifecycleRequest(BaseModel):

@@ -43,6 +43,18 @@ class PullNotSupportedError(Exception):
         )
 
 
+class EmbeddingsNotSupportedError(Exception):
+    """Raised when embeddings are requested from an engine that cannot."""
+
+    def __init__(self, engine_name: str):
+        self.engine_name = engine_name
+        super().__init__(
+            "{} cannot produce embeddings. Only Ollama-backed nodes support "
+            "this, because an embedding model has to be served alongside "
+            "the loaded chat model rather than replacing it.".format(engine_name)
+        )
+
+
 class InsufficientDiskError(Exception):
     """Raised when a download would not fit, or would leave too little.
 

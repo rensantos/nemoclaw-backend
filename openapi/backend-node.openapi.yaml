@@ -225,12 +225,22 @@ paths:
       tags: [openai-compatible]
       summary: Create embeddings
       operationId: createEmbeddings
-      x-implementation-status: unscheduled
+      x-implementation-status: implemented
       description: |
-        Planned but unscheduled. No engine (InferenceEngine) currently
-        defines an embed() method and none is on the near-term roadmap
-        (see docs/architecture.md Engine Interface section). Calling this
-        endpoint today returns 404 (no route registered).
+        Embedding vectors, one per input, in request order.
+
+        `model` is REQUIRED here, unlike /v1/chat/completions where it
+        falls back to the loaded model. An embedding model is a separate
+        model from the loaded chat model: defaulting to the chat model
+        would return vectors that silently fail to match a vectorstore
+        built with a real embedding model, so the request is rejected
+        instead. The named model is not validated against the loaded chat
+        model and never triggers a model switch.
+
+        Requires an engine advertising `supports_embeddings`
+        (OllamaEngine, whose daemon serves an embedding model alongside
+        the loaded chat model). TransformersEngine holds one model in
+        memory and returns 501 rather than unloading the chat model.
       requestBody:
         required: true
         content:
@@ -244,6 +254,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EmbeddingResponse"
+        "400":
+          description: input was empty or contained only blank strings.
+        "404":
+          description: The named embedding model is not available on this node.
+        "501":
+          description: |
+            This node's engine cannot produce embeddings
+            (supports_embeddings is False).
+        "503":
+          description: Engine unavailable, or the node is not READY.
 
   # ---------------------------------------------------------------------
   # Tier 2 — Native management surface
@@ -1065,10 +1085,12 @@ components:
 
     EmbeddingRequest:
       type: object
-      required: [input]
+      # model is required, unlike ChatCompletionRequest: see the endpoint
+      # description for why there is no safe default.
+      required: [model, input]
       properties:
         model:
-          type: [string, "null"]
+          type: string
         input:
           oneOf:
             - type: string
@@ -1108,8 +1130,18 @@ components:
 
     HealthResponse:
       type: object
-      required: [status, model, cuda, gpu, lifecycle_state]
+      required: [status, model, cuda, gpu, lifecycle_state, instance]
       properties:
+        instance:
+          type: string
+          description: |
+            Which backend instance answered. Defaults to the machine's
+            hostname; set backend.instance in config (or the INSTANCE env
+            var) to name it explicitly. Every instance otherwise returns
+            an identical response shape, so a client with several
+            backends reachable at once - a local one plus SSH-tunnelled
+            remotes on different ports - could not tell which machine
+            replied except by guessing from the model or GPU name.
         status:
           type: string
           enum: [ok, degraded, unavailable]

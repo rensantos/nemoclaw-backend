@@ -341,16 +341,25 @@
   why its node definitions carry an `ollama_host` alongside `base_url`.
   This is *not* laziness — those scripts need three things the pinned
   contract does not expose:
-  1. **Embeddings.** `/v1/embeddings` is `x-implementation-status:
-     unscheduled` and no `InferenceEngine` defines `embed()`. This is the
-     hard blocker; semantic claim-merging in `deep_web_answer.py` cannot
-     work without it.
+  1. ~~**Embeddings.**~~ **DONE 2026-08-05.** `InferenceEngine.embed()`
+     exists (concrete, raising `NotImplementedError`, gated by a new
+     `supports_embeddings` flag), `OllamaEngine` implements it against
+     `/api/embed` with a fallback to the legacy `/api/embeddings`, and
+     `POST /v1/embeddings` is registered and `implemented` in the
+     contract. `model` is **required** on that endpoint, unlike
+     `/v1/chat/completions`: an embedding model is a different model from
+     the loaded chat model, and defaulting to the chat model would return
+     vectors that silently fail to match a vectorstore built with a real
+     embedding model. It never validates against, or switches, the loaded
+     chat model. Verified byte-identical to the frontend's existing
+     direct-to-Ollama vectors for the same text and model, so an existing
+     Chroma index stays valid when the frontend switches over.
   2. `format: json` (constrained decoding).
   3. Ollama-style retry ladders over `num_ctx`/`num_predict`, which the
      frontend uses to recover from context-overflow failures.
 
-  Adding `embed()` + `/v1/embeddings` is the single change that unblocks
-  most of this, and is the natural next backend capability. Everything
+  With embeddings landed, items 2 and 3 are what still keep those
+  frontend scripts on native Ollama. Everything
   *else* in that frontend — chat, streaming, model listing, model
   selection, downloading, host resources — now goes through the contract,
   including for its Local Node, which runs its own backend instance rather

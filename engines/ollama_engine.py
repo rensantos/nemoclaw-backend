@@ -312,6 +312,9 @@ class OllamaEngine(InferenceEngine):
     supports_runtime_lifecycle = True
     supports_pull = True
     supports_streaming = True
+    # The daemon serves several models concurrently, so an embedding model
+    # can answer alongside the loaded chat model without a switch.
+    supports_embeddings = True
 
     def __init__(self, config):
         self.config = config
@@ -721,6 +724,60 @@ class OllamaEngine(InferenceEngine):
             response.get("response", ""), response.get("thinking")
         )
         return {"model": self.model_id, "response": text, "reasoning": reasoning}
+
+    def embed(self, texts: List[str], model: str) -> List[List[float]]:
+        """Embeddings from the daemon, one vector per input, in order.
+
+        Deliberately does NOT call _check_requested_model(): an embedding
+        model is a different model from the loaded chat model, and
+        rejecting it would make the endpoint unusable. Nothing here
+        touches self.model_id or the lifecycle - the daemon serves both
+        concurrently.
+
+        Tries /api/embed (current, batch: {"input": [...]} ->
+        {"embeddings": [[...]]}) and falls back to the older
+        /api/embeddings (single: {"prompt": str} -> {"embedding": [...]}),
+        because which one a daemon has depends on its version and the
+        older route is still what some installs expose.
+        """
+        if not texts:
+            return []
+        try:
+            response = self._post("/api/embed", {"model": model, "input": list(texts)})
+            vectors = response.get("embeddings")
+            if isinstance(vectors, list) and len(vectors) == len(texts):
+                return [list(vector) for vector in vectors]
+        except EngineUnavailableError:
+            # Falls through to the legacy route below rather than failing:
+            # an older daemon answers 404 here but serves /api/embeddings.
+            pass
+        vectors = []
+        try:
+            for text in texts:
+                response = self._post(
+                    "/api/embeddings", {"model": model, "prompt": text}
+                )
+                vector = response.get("embedding")
+                if not isinstance(vector, list):
+                    raise EngineUnavailableError(
+                        "Ollama returned no embedding for model '{}'".format(model)
+                    )
+                vectors.append(list(vector))
+        except EngineUnavailableError:
+            # _request() collapses every HTTP error into
+            # EngineUnavailableError, but an un-pulled embedding model is
+            # a 404 from a perfectly healthy daemon ("model ... not found,
+            # try pulling it first"). Reporting that as 503 would send a
+            # caller debugging their daemon when the fix is `ollama pull`,
+            # so ask the tag list which of the two it actually is. If the
+            # daemon really is down this call raises too, and 503 stands.
+            self._require_embedding_model(model)
+            raise
+        return vectors
+
+    def _require_embedding_model(self, model: str) -> None:
+        if model not in self._tag_names(self._get_tags()):
+            raise ModelNotFoundError(model, self.model_id)
 
     def _check_requested_model(self, requested_model: Optional[str]) -> None:
         if requested_model is not None and requested_model != self.model_id:

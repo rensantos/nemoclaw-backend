@@ -27,6 +27,7 @@ def _make_config(quantization="none", model_id="test-model", gpu="0", revision="
             gpu=gpu,
             engine="transformers",
             ollama_host="http://127.0.0.1:11434",
+            instance="test-instance",
         ),
         model=ModelConfig(
             id=model_id,

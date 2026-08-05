@@ -68,6 +68,7 @@ backend:
   gpu: 0
   engine: transformers  # or: ollama
   ollama_host: http://127.0.0.1:11434  # only used when engine: ollama
+  instance: ""  # name for this machine; empty = use the hostname
 
 model:
   id: TinyLlama/TinyLlama-1.1B-Chat-v1.0
@@ -142,6 +143,22 @@ For one-off overrides, keep the YAML unchanged and pass environment variables:
 ```bash
 MODEL_ID=TinyLlama/TinyLlama-1.1B-Chat-v1.0 GPU=0 ./scripts/start.sh
 ```
+
+### Naming an instance
+
+`backend.instance` (or the `INSTANCE` env var) names *this* machine, and is
+reported by `GET /health`:
+
+```json
+{"status": "ok", "loaded_model": "qwen3:30b", "instance": "ubi"}
+```
+
+It defaults to the system hostname. This exists because every backend
+instance otherwise answers with an identical shape - with several reachable
+at once (a local one plus SSH-tunnelled remotes on different ports) there
+was no way to tell which machine replied except by guessing from the model
+or GPU name. One codebase runs on every machine; only the instance name
+differs.
 
 ## CLI
 
@@ -628,6 +645,35 @@ chosen.
 Loading is lazy and needs no action: if the chosen model is resident,
 inference starts immediately; if it was evicted (5-minute keep-alive), the
 next request reloads it.
+
+## Embeddings
+
+`POST /v1/embeddings` returns one vector per input, in request order:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "nomic-embed-text", "input": ["first", "second"]}'
+```
+
+`input` accepts a bare string or an array. `model` is **required** here,
+unlike `/v1/chat/completions` where it falls back to the loaded model:
+
+- An embedding model is a *different model* from the loaded chat model.
+  Defaulting to the chat model would return vectors that silently fail to
+  match a vectorstore built with a real embedding model - worse than an
+  error, because nothing looks broken until retrieval quality degrades.
+- The named model is never validated against the loaded chat model and
+  never triggers a switch. Ollama serves both concurrently.
+
+Requires an engine advertising `supports_embeddings` (OllamaEngine).
+TransformersEngine holds one model in memory and returns `501` rather than
+unloading the chat model to answer an embedding request.
+
+An un-pulled embedding model returns `404 model_not_found`, not `503` -
+Ollama answers "model not found, try pulling it first" from a perfectly
+healthy daemon, and reporting that as unavailable would send you debugging
+the daemon instead of running `ollama pull`.
 
 ## API Tests
 

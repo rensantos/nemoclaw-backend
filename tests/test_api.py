@@ -26,6 +26,7 @@ except (ImportError, RuntimeError):  # pragma: no cover - host dependent
     API_TESTABLE = False
 
 from services.lifecycle import (
+    EmbeddingsNotSupportedError,
     LifecycleConflictError,
     LifecycleState,
     LifecycleUnavailableError,
@@ -55,6 +56,8 @@ class FakeService:
             {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
         ]
         self.lifecycle_error = None
+        self.embed_result = [[0.1, 0.2, 0.3]]
+        self.embed_error = None
         self.calls = []
 
     def health(self):
@@ -62,6 +65,7 @@ class FakeService:
             "model": "qwen3:30b", "cuda": True, "gpu": None, "status": "ok",
             "lifecycle_state": self.lifecycle_state.value,
             "loaded_model": "qwen3:30b", "target_model": None,
+            "instance": "test-host",
         }
 
     def list_models(self):
@@ -83,6 +87,12 @@ class FakeService:
 
     def generate_text(self, prompt, max_new_tokens, temperature, think=None):
         return {"model": "qwen3:30b", "response": prompt, "reasoning": None}
+
+    def embed(self, texts, model):
+        self.calls.append(("embed", model, tuple(texts)))
+        if self.embed_error:
+            raise self.embed_error
+        return self.embed_result
 
     def _lifecycle(self, name, model_id=None):
         self.calls.append((name, model_id))
@@ -379,6 +389,70 @@ class ApiRequestTests(unittest.TestCase):
         response = self.client.post("/admin/model/load", json={"model_id": "x"})
 
         self.assertEqual(response.json()["lifecycle_state"], "degraded")
+
+    def test_health_names_which_instance_answered(self):
+        response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("instance", response.json())
+
+    def test_embeddings_returns_one_vector_per_input_in_order(self):
+        self.service.embed_result = [[0.1, 0.2], [0.3, 0.4]]
+
+        response = self.client.post(
+            "/v1/embeddings", json={"model": "nomic-embed-text", "input": ["a", "b"]}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["object"], "list")
+        self.assertEqual(body["model"], "nomic-embed-text")
+        self.assertEqual([row["index"] for row in body["data"]], [0, 1])
+        self.assertEqual([row["embedding"] for row in body["data"]], [[0.1, 0.2], [0.3, 0.4]])
+        self.assertEqual(self.service.calls[-1], ("embed", "nomic-embed-text", ("a", "b")))
+
+    def test_embeddings_accepts_a_bare_string_input(self):
+        response = self.client.post(
+            "/v1/embeddings", json={"model": "nomic-embed-text", "input": "hello"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.service.calls[-1], ("embed", "nomic-embed-text", ("hello",)))
+
+    def test_embeddings_does_not_default_to_the_loaded_chat_model(self):
+        """model is required: embedding text with the chat model would return
+        vectors that silently fail to match a real vectorstore."""
+        response = self.client.post("/v1/embeddings", json={"input": "hello"})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_embeddings_rejects_empty_input(self):
+        for payload in ({"model": "m", "input": ""}, {"model": "m", "input": []},
+                        {"model": "m", "input": ["ok", "   "]}):
+            with self.subTest(payload=payload):
+                response = self.client.post("/v1/embeddings", json=payload)
+                self.assertEqual(response.status_code, 400)
+
+    def test_embeddings_on_an_engine_that_cannot_embed_is_501(self):
+        self.service.embed_error = EmbeddingsNotSupportedError("TransformersEngine")
+
+        response = self.client.post(
+            "/v1/embeddings", json={"model": "nomic-embed-text", "input": "hi"}
+        )
+
+        self.assertEqual(response.status_code, 501)
+        self.assertIn("TransformersEngine", response.json()["detail"])
+
+    def test_embeddings_when_the_engine_is_unreachable_is_503(self):
+        from engines.base import EngineUnavailableError
+
+        self.service.embed_error = EngineUnavailableError("daemon down")
+
+        response = self.client.post(
+            "/v1/embeddings", json={"model": "nomic-embed-text", "input": "hi"}
+        )
+
+        self.assertEqual(response.status_code, 503)
 
 
 if __name__ == "__main__":

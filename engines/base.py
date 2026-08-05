@@ -88,6 +88,11 @@ class InferenceEngine(ABC):
 
     supports_streaming = False
 
+    # False by default so an engine that cannot embed reports a capability
+    # rather than crashing, the same posture as supports_pull/streaming
+    # above. The service turns this into a 501 rather than a 500.
+    supports_embeddings = False
+
     def chat_stream(
         self,
         messages: List,
@@ -210,3 +215,22 @@ class InferenceEngine(ABC):
         think: Optional[bool] = None,
     ):
         pass
+
+    def embed(self, texts: List[str], model: str) -> List[List[float]]:
+        """Embedding vectors for texts, one per input, in order.
+
+        `model` is required and is deliberately NOT the loaded chat model:
+        embedding models are separate models (nomic-embed-text and
+        friends), so this must not go through the requested-model check
+        that chat() uses, and must not trigger a model switch. Engines
+        that can serve several models at once (Ollama) satisfy this
+        naturally; engines that hold exactly one model in memory should
+        keep returning False from supports_embeddings rather than
+        unloading the chat model to answer an embedding request.
+
+        Raises NotImplementedError by default - concrete, not abstract, so
+        adding this capability does not break existing engines.
+        """
+        raise NotImplementedError(
+            "{} cannot produce embeddings".format(type(self).__name__)
+        )

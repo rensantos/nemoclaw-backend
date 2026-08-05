@@ -131,3 +131,37 @@ class ConfigEngineSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstanceIdentityTests(unittest.TestCase):
+    """Every backend instance otherwise returns an identical /health shape,
+    so with several reachable at once there is no way to tell them apart."""
+
+    def _load(self, raw_config, env=None):
+        with mock.patch("config._load_yaml_config", return_value=raw_config):
+            with mock.patch.dict(os.environ, env or {}, clear=True):
+                return config_module.load_config()
+
+    def test_defaults_to_the_machine_hostname(self):
+        import socket
+
+        result = self._load({"backend": {}})
+
+        self.assertEqual(result.backend.instance, socket.gethostname())
+
+    def test_config_value_overrides_the_hostname(self):
+        result = self._load({"backend": {"instance": "ubi"}})
+
+        self.assertEqual(result.backend.instance, "ubi")
+
+    def test_env_var_wins_over_config(self):
+        result = self._load({"backend": {"instance": "ubi"}}, env={"INSTANCE": "zerob"})
+
+        self.assertEqual(result.backend.instance, "zerob")
+
+    def test_blank_value_falls_back_to_the_hostname(self):
+        import socket
+
+        result = self._load({"backend": {"instance": "   "}})
+
+        self.assertEqual(result.backend.instance, socket.gethostname())
