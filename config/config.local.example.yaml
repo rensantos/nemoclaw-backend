@@ -1,0 +1,24 @@
+# Per-machine overrides. Copy to config.local.yaml (gitignored) and set
+# only what differs on THIS machine - everything else falls through to
+# config/config.yaml, which stays tracked and shared.
+#
+# This exists because one codebase runs on several machines with
+# different GPUs, ports and pulled models. Editing the tracked
+# config.yaml on each of them means permanent local drift and a merge
+# conflict on every pull.
+#
+# KNOWN GAP: read path only. ModelManager still writes persisted model
+# switches and auto-registered catalog entries into config.yaml itself,
+# so those still dirty the tracked file. If you set model.id here it
+# will also override a persisted switch on the next load - pick one per
+# machine, not both.
+
+backend:
+  # port: 8001            # 8000 is often the SSH tunnel to a remote node
+  # gpu: "0"              # whichever card is free on this box
+  # instance: zerob       # name reported by /health; defaults to hostname
+  # engine: ollama
+  # ollama_host: http://127.0.0.1:11434
+
+model:
+  # id: hermes3:8b

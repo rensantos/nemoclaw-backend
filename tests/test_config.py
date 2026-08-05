@@ -165,3 +165,57 @@ class InstanceIdentityTests(unittest.TestCase):
         result = self._load({"backend": {"instance": "   "}})
 
         self.assertEqual(result.backend.instance, socket.gethostname())
+
+
+class LocalConfigOverlayTests(unittest.TestCase):
+    """config.yaml is tracked and shared; config.local.yaml is gitignored
+    and holds only what differs on this machine."""
+
+    def _load(self, base, local, env=None):
+        def fake_load(path=config_module.CONFIG_PATH):
+            return local if path == config_module.CONFIG_LOCAL_PATH else base
+
+        with mock.patch("config.load_yaml_config", side_effect=fake_load):
+            with mock.patch.dict(os.environ, env or {}, clear=True):
+                return config_module.load_config()
+
+    def test_overlay_value_wins_over_the_tracked_file(self):
+        result = self._load({"backend": {"port": 8000}}, {"backend": {"port": 8001}})
+
+        self.assertEqual(result.backend.port, 8001)
+
+    def test_keys_absent_from_the_overlay_fall_through(self):
+        result = self._load(
+            {"backend": {"port": 8000, "gpu": "2,3", "engine": "ollama"}},
+            {"backend": {"port": 8001}},
+        )
+
+        self.assertEqual(result.backend.port, 8001)
+        self.assertEqual(result.backend.gpu, "2,3", "untouched keys keep the shared value")
+        self.assertEqual(result.backend.engine, "ollama")
+
+    def test_a_section_missing_from_the_overlay_is_untouched(self):
+        result = self._load(
+            {"backend": {"port": 8000}, "model": {"id": "qwen3:30b"}},
+            {"backend": {"port": 8001}},
+        )
+
+        self.assertEqual(result.model.id, "qwen3:30b")
+
+    def test_no_overlay_file_behaves_exactly_as_before(self):
+        result = self._load({"backend": {"port": 8000}, "model": {"id": "qwen3:30b"}}, {})
+
+        self.assertEqual(result.backend.port, 8000)
+        self.assertEqual(result.model.id, "qwen3:30b")
+
+    def test_env_vars_still_win_over_the_overlay(self):
+        result = self._load(
+            {"backend": {"port": 8000}}, {"backend": {"port": 8001}}, env={"PORT": "8002"}
+        )
+
+        self.assertEqual(result.backend.port, 8002)
+
+    def test_overlay_can_name_the_instance_without_touching_the_tracked_file(self):
+        result = self._load({"backend": {}}, {"backend": {"instance": "zetopi"}})
+
+        self.assertEqual(result.backend.instance, "zetopi")

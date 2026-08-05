@@ -4,3 +4,4 @@ requirements-lock.txt
 logs/
 run/
 .claude/
+config/config.local.yaml

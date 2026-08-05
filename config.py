@@ -8,6 +8,9 @@ import yaml
 
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config.yaml"
+# Untracked per-machine overrides layered over CONFIG_PATH. See
+# _load_yaml_config() for why, and for what it deliberately does not cover.
+CONFIG_LOCAL_PATH = Path(__file__).resolve().parent / "config" / "config.local.yaml"
 
 DEFAULTS = {
     "backend": {
@@ -86,8 +89,48 @@ class Config:
         return self.model.temperature_default
 
 
+def _merge_sections(base: dict, overlay: dict) -> dict:
+    """Overlay wins per key, one level into each section.
+
+    Deliberately not a deep recursive merge: the config is two levels
+    (section -> key) plus model.available, which is a *list*. Merging a
+    list element-wise would be guesswork, so an overlay that sets
+    model.available replaces it wholesale, and one that does not leaves
+    the base catalog untouched.
+    """
+    merged = {section: dict(values) if isinstance(values, dict) else values
+              for section, values in base.items()}
+    for section, values in overlay.items():
+        if isinstance(values, dict) and isinstance(merged.get(section), dict):
+            merged[section] = {**merged[section], **values}
+        else:
+            merged[section] = values
+    return merged
+
+
 def _load_yaml_config():
-    return load_yaml_config()
+    """config.yaml, with an optional untracked config.local.yaml on top.
+
+    config.yaml is tracked and describes a shared default; every machine
+    otherwise has to edit it, which means permanent local drift and a
+    merge conflict on every pull (this repo runs on several machines with
+    different GPUs, ports and pulled models). config.local.yaml is
+    gitignored and holds only what differs here - typically backend.gpu,
+    backend.port, backend.instance and model.id.
+
+    KNOWN GAP: this is the read path only. ModelManager still *writes*
+    into config.yaml (persisted model switches, and catalog entries
+    auto-added after a pull), because it reads-mutates-writes the whole
+    document with comment-preserving line editing. So a persisted switch
+    still dirties the tracked file, and a model.id set here will override
+    it on next load. Pick one per machine: either set model.id in the
+    overlay, or use persisted switches - not both.
+    """
+    base = load_yaml_config()
+    local = load_yaml_config(CONFIG_LOCAL_PATH)
+    if not local:
+        return base
+    return _merge_sections(base, local)
 
 
 def load_yaml_config(path: Path = CONFIG_PATH):

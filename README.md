@@ -144,6 +144,39 @@ For one-off overrides, keep the YAML unchanged and pass environment variables:
 MODEL_ID=TinyLlama/TinyLlama-1.1B-Chat-v1.0 GPU=0 ./scripts/start.sh
 ```
 
+### Per-machine overrides (`config.local.yaml`)
+
+`config/config.yaml` is tracked and shared. Anything that differs on
+*this* machine goes in `config/config.local.yaml`, which is gitignored and
+layered on top:
+
+```bash
+cp config/config.local.example.yaml config/config.local.yaml
+```
+
+```yaml
+backend:
+  port: 8001
+  gpu: "0"
+  instance: zerob
+```
+
+Precedence is env var > `config.local.yaml` > `config.yaml` > built-in
+defaults. Merging is per key within a section, so setting `backend.port`
+leaves `backend.gpu` and the whole `model` section alone. `model.available`
+is a list and is replaced wholesale if an overlay sets it, never merged
+element-wise.
+
+This exists because one codebase runs on several machines with different
+GPUs, ports and pulled models; editing the tracked file on each means
+permanent local drift and a merge conflict on every pull.
+
+**Known gap — the write path.** `ModelManager` still writes into
+`config.yaml` itself: persisted model switches (`--persist`) and catalog
+entries auto-added after a pull. Those still dirty the tracked file. If you
+set `model.id` in the overlay it will also override a persisted switch on
+the next load, so per machine pick one or the other, not both.
+
 ### Naming an instance
 
 `backend.instance` (or the `INSTANCE` env var) names *this* machine, and is
