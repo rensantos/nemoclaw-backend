@@ -125,6 +125,15 @@ idle card) for this reason — a single-index config change, not a
 multi-GPU setup (see `docs/future-tasks.md`'s Multi-GPU entry, still
 unstarted).
 
+**Read the above as a dated observation, not a standing rule.** No GPU on
+this box is assigned to anyone: allocation is opportunistic, whoever
+needs a free card takes one, and which indices are busy changes over
+time. "GPU 0/1 are the other user's, 2/3 are ours" is a
+misreading — repeatedly made — of what is only a snapshot of who happened
+to be running what. Always check what is actually free (`./backend gpu`)
+before assuming an index is available, and record a machine's choice in
+the untracked `config.local.yaml` rather than the shared file.
+
 **Open strategic question from 2026-07-30, now answered by this
 session's results:** given how narrow and moving UBI's compatibility
 window looked, it was unclear whether continuing to chase
