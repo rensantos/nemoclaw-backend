@@ -1,10 +1,13 @@
 # This machine's per-instance overrides. See config/config.example.machine.yaml
 # for the full template and layering explanation.
 #
-# Only instance differs from the shared config/config.yaml here: gpu ("2,3")
-# and model.id (qwen3:30b) in the shared file already match what this box
-# actually runs, so they are left there rather than duplicated - see that
-# file's comments for why the gpu value is a snapshot, not a reservation.
+# Only instance is set here. gpu and model.id are deliberately left to the
+# shared config/config.yaml: this box has 4 GPUs shared with other
+# researchers, none assigned to any project or person - whichever value is
+# there is only a snapshot of what was free when someone last checked, not a
+# fixed assignment for this machine. Check `./backend gpu` before trusting
+# it. The one real rule is behavioral, not about which index: never restart
+# in a way that kills another user's process to free a card.
 backend:
   # Friendly name reported by GET /health.
   instance: ubi
