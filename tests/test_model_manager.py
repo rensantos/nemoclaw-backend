@@ -338,6 +338,48 @@ class InstalledModelDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(ids, ["catalogued-a"])
 
+    def test_catalogued_but_not_installed_ollama_models_are_dropped(self):
+        """The shared config.yaml names six tags whose own descriptions
+        read "not currently pulled"; UBI inherits that catalog, has one
+        model, and was offering all seven. The daemon is the authority."""
+        with mock.patch(
+            "services.model.load_layered_config",
+            return_value=self._layered(["catalogued-a", "never-pulled"]),
+        ):
+            manager = self._manager(["catalogued-a", "never-pulled"], ["catalogued-a"])
+            ids = [m["id"] for m in manager.available_models()]
+
+        self.assertEqual(ids, ["catalogued-a"])
+
+    def test_the_selected_model_is_never_hidden(self):
+        """Concealing what the node is actually serving would be worse
+        than listing something absent from the daemon's tags."""
+        with mock.patch(
+            "services.model.load_layered_config", return_value=self._layered(["catalogued-a"])
+        ):
+            manager = self._manager(["catalogued-a"], ["something-else"])
+            ids = [m["id"] for m in manager.available_models()]
+
+        self.assertIn("catalogued-a", ids)
+
+    def test_other_engines_are_not_filtered_by_ollama_tags(self):
+        """A Transformers repo has nothing to enumerate, so absence from
+        the Ollama daemon says nothing about it."""
+        layered = {
+            "model": {
+                "id": "catalogued-a",
+                "available": [
+                    {"id": "catalogued-a", "engine": "ollama"},
+                    {"id": "org/some-hf-repo", "engine": "transformers"},
+                ],
+            }
+        }
+        with mock.patch("services.model.load_layered_config", return_value=layered):
+            manager = self._manager([], ["catalogued-a"])
+            ids = [m["id"] for m in manager.available_models()]
+
+        self.assertIn("org/some-hf-repo", ids)
+
     def test_register_model_is_a_no_op_for_an_installed_model(self):
         """Nothing needs writing once the model is already discoverable -
         which is also what stops every pull from dirtying config.yaml."""

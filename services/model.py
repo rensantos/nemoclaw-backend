@@ -412,14 +412,40 @@ class ModelManager:
             models.insert(0, self._model_entry_from_id(str(selected_model_id)))
             known_ids.add(str(selected_model_id))
 
+        installed = self._installed_model_ids()
+
         # Whatever the daemon actually has, catalogued or not. Appended
         # rather than prepended so a hand-written entry (which may carry
         # real metadata) keeps its position and its fields; this only ever
         # ADDS models that are genuinely present on disk.
-        for model_id in self._installed_model_ids():
+        for model_id in installed:
             if model_id not in known_ids:
                 models.append(self._ollama_entry_from_id(model_id))
                 known_ids.add(model_id)
+
+        if installed:
+            # ...and drop catalogued Ollama models that are NOT on disk.
+            # The daemon is the authority on what this node can serve, so
+            # listing anything else is noise: the shared config.yaml names
+            # six tags whose own descriptions read "not currently pulled",
+            # and UBI - which inherits that catalog and has exactly one
+            # model - was offering all seven. Ollama can pull any tag from
+            # the registry anyway, so a static YAML list was never a
+            # meaningful "what could I install" either.
+            #
+            # Guarded on `installed` being non-empty: an unreachable
+            # daemon must not empty the catalog and make every model
+            # unselectable. Entries for OTHER engines are left alone -
+            # a Transformers repo has nothing to enumerate - and the
+            # selected model is never hidden, since concealing what the
+            # node is actually serving would be worse than listing it.
+            models = [
+                model
+                for model in models
+                if model.get("engine") != "ollama"
+                or str(model["id"]) in installed
+                or str(model["id"]) == str(selected_model_id)
+            ]
 
         return models
 
