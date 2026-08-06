@@ -144,38 +144,55 @@ For one-off overrides, keep the YAML unchanged and pass environment variables:
 MODEL_ID=TinyLlama/TinyLlama-1.1B-Chat-v1.0 GPU=0 ./scripts/start.sh
 ```
 
-### Per-machine overrides (`config.local.yaml`)
+### Per-machine configuration
 
-`config/config.yaml` is tracked and shared. Anything that differs on
-*this* machine goes in `config/config.local.yaml`, which is gitignored and
-layered on top:
+`config/config.yaml` holds defaults shared by every machine. Anything that
+differs on *this* machine goes in its own file, found automatically by
+hostname:
 
 ```bash
-cp config/config.local.example.yaml config/config.local.yaml
+cp config/config.example.machine.yaml config/config.$(hostname).yaml
 ```
 
 ```yaml
 backend:
+  instance: zerob
   port: 8001
   gpu: "0"
-  instance: zerob
+model:
+  id: hermes3:8b
 ```
 
-Precedence is env var > `config.local.yaml` > `config.yaml` > built-in
-defaults. Merging is per key within a section, so setting `backend.port`
-leaves `backend.gpu` and the whole `model` section alone. `model.available`
-is a list and is replaced wholesale if an overlay sets it, never merged
+**These per-machine files are tracked in git on purpose.** Every machine's
+real configuration is then versioned and readable from any other machine -
+useful when the fleet spans a shared GPU host, a desktop and a laptop. They
+cannot conflict with each other because each machine only ever edits its
+own; that is precisely why the filename carries the machine name instead of
+every machine writing one shared path.
+
+Layering, lowest priority first:
+
+| | file | tracked? |
+|---|---|---|
+| 1 | `config/config.yaml` | yes — shared defaults |
+| 2 | `config/config.<instance>.yaml` | yes — this machine |
+| 3 | `config/config.local.yaml` | **no** — secrets/scratch, never committed |
+| 4 | environment variables | — highest |
+
+Merging is per key within a section, so setting `backend.port` leaves
+`backend.gpu` and the whole `model` section alone. `model.available` is a
+list and is replaced wholesale if a layer sets it, never merged
 element-wise.
 
-This exists because one codebase runs on several machines with different
-GPUs, ports and pulled models; editing the tracked file on each means
-permanent local drift and a merge conflict on every pull.
+The file is looked up by the resolved instance *and* by the bare hostname,
+so a machine launched without `INSTANCE` (`./backend status`, a cron job)
+still finds its own file rather than silently falling back to the shared
+defaults and reporting a different GPU or model than it serves.
 
-**Known gap — the write path.** `ModelManager` still writes into
-`config.yaml` itself: persisted model switches (`--persist`) and catalog
-entries auto-added after a pull. Those still dirty the tracked file. If you
-set `model.id` in the overlay it will also override a persisted switch on
-the next load, so per machine pick one or the other, not both.
+**Known gap — the write path.** `ModelManager` *reads* through all these
+layers, but still *writes* into `config/config.yaml`: persisted model
+switches (`--persist`) and catalog entries auto-added after a pull. Those
+land in the shared file rather than this machine's own.
 
 ### Naming an instance
 

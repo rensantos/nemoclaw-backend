@@ -1,4 +1,5 @@
 import os
+import re
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,10 +8,11 @@ from typing import Optional
 import yaml
 
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config.yaml"
+CONFIG_DIR = Path(__file__).resolve().parent / "config"
+CONFIG_PATH = CONFIG_DIR / "config.yaml"
 # Untracked per-machine overrides layered over CONFIG_PATH. See
-# _load_yaml_config() for why, and for what it deliberately does not cover.
-CONFIG_LOCAL_PATH = Path(__file__).resolve().parent / "config" / "config.local.yaml"
+# load_layered_config() for why, and for what it deliberately does not cover.
+CONFIG_LOCAL_PATH = CONFIG_DIR / "config.local.yaml"
 
 DEFAULTS = {
     "backend": {
@@ -108,29 +110,86 @@ def _merge_sections(base: dict, overlay: dict) -> dict:
     return merged
 
 
-def _load_yaml_config():
-    """config.yaml, with an optional untracked config.local.yaml on top.
+def instance_config_candidates(instance: str) -> list[Path]:
+    """Per-machine config filenames to try, best match first.
 
-    config.yaml is tracked and describes a shared default; every machine
-    otherwise has to edit it, which means permanent local drift and a
-    merge conflict on every pull (this repo runs on several machines with
-    different GPUs, ports and pulled models). config.local.yaml is
-    gitignored and holds only what differs here - typically backend.gpu,
-    backend.port, backend.instance and model.id.
-
-    KNOWN GAP: this is the read path only. ModelManager still *writes*
-    into config.yaml (persisted model switches, and catalog entries
-    auto-added after a pull), because it reads-mutates-writes the whole
-    document with comment-preserving line editing. So a persisted switch
-    still dirties the tracked file, and a model.id set here will override
-    it on next load. Pick one per machine: either set model.id in the
-    overlay, or use persisted switches - not both.
+    A hostname like "a4000.ipa.test" yields both
+    config/config.a4000.ipa.test.yaml and the friendlier
+    config/config.a4000.yaml, so a machine can be named by its short
+    hostname without setting anything.
     """
-    base = load_yaml_config()
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", (instance or "").strip()).strip(".-")
+    if not name:
+        return []
+    candidates = [CONFIG_DIR / "config.{}.yaml".format(name)]
+    head = name.split(".", 1)[0]
+    if head and head != name:
+        candidates.append(CONFIG_DIR / "config.{}.yaml".format(head))
+    return candidates
+
+
+def _resolve_instance(raw_config) -> str:
+    """The machine's name, before the per-machine file is loaded.
+
+    Chicken-and-egg: the instance name selects which config file to load,
+    but is itself a config value. Resolved here from the sources that are
+    available without that file - the INSTANCE env var, the shared
+    config's own backend.instance, then the hostname.
+    """
+    return str(
+        _env_value("INSTANCE", _section_value(raw_config, "backend", "instance")) or ""
+    ).strip() or socket.gethostname()
+
+
+def load_layered_config():
+    """The shared config with per-machine layers on top.
+
+    Three layers, lowest first - all optional except the base:
+
+    1. `config/config.yaml` - **tracked**. Defaults shared by every
+       machine.
+    2. `config/config.<instance>.yaml` - **tracked**. This machine's
+       differences (GPU, port, model). Tracked deliberately: every
+       machine's real configuration is then versioned and readable from
+       any other machine, which an untracked file would not give. Each
+       machine only ever edits its own file, so they cannot conflict with
+       each other the way one shared `config.local.yaml` would - that is
+       the whole reason the filename carries the instance name.
+    3. `config/config.local.yaml` - **untracked**. Anything that must not
+       be committed, or a scratch override. Highest priority.
+
+    Env vars still beat all three (see load_config).
+
+    KNOWN GAP: this is the read path. ModelManager still *writes* into
+    config.yaml (persisted model switches, catalog entries auto-added
+    after a pull), because it reads-mutates-writes the whole document
+    with comment-preserving line editing. So a persisted switch dirties
+    the shared file rather than this machine's own - and a model.id set
+    in a layer above overrides it on the next load. Per machine, use one
+    or the other, not both.
+    """
+    merged = base = load_yaml_config()
+    # Look up by the resolved instance AND by the bare hostname. A machine
+    # launched with INSTANCE=zerob must find config.zerob.yaml, but the same
+    # machine invoked without that env (./backend status, a cron job) must
+    # still find its own file - otherwise it would silently fall back to the
+    # shared defaults and report a different GPU or model than it serves.
+    # Naming the file after the hostname therefore always works, and such a
+    # file can set backend.instance itself to get a friendlier name.
+    seen: set[Path] = set()
+    for path in [*instance_config_candidates(_resolve_instance(base)),
+                 *instance_config_candidates(socket.gethostname())]:
+        if path in seen:
+            continue
+        seen.add(path)
+        per_machine = load_yaml_config(path)
+        if per_machine:
+            merged = _merge_sections(merged, per_machine)
+            break
     local = load_yaml_config(CONFIG_LOCAL_PATH)
-    if not local:
-        return base
-    return _merge_sections(base, local)
+    if local:
+        merged = _merge_sections(merged, local)
+    return merged
 
 
 def load_yaml_config(path: Path = CONFIG_PATH):
@@ -185,7 +244,7 @@ def _optional_bool_env(name: str, fallback):
 
 
 def load_config() -> Config:
-    raw_config = _load_yaml_config()
+    raw_config = load_layered_config()
 
     host = _env_value("HOST", _section_value(raw_config, "backend", "host"))
     port = _int_env("PORT", _section_value(raw_config, "backend", "port"))

@@ -3,11 +3,21 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from config import CONFIG_PATH, DEFAULTS, load_yaml_config
+from config import CONFIG_PATH, DEFAULTS, load_layered_config, load_yaml_config
 
 
 class ModelManager:
-    """Owns configured model metadata and selected-model configuration."""
+    """Owns configured model metadata and selected-model configuration.
+
+    Reads are layered (see _load); writes still target config.yaml. That
+    asymmetry is deliberate for now and is the remaining half of the
+    per-machine config work: redirecting writes means splitting this
+    class's read-mutate-write cycle, whose comment-preserving line
+    editing is delicate enough that breaking it breaks model
+    registration. Consequence today: a persisted `model switch` or a
+    model auto-registered after a pull still lands in the SHARED
+    config.yaml rather than this machine's own file.
+    """
 
     def __init__(self, config_path: Path = CONFIG_PATH):
         self.config_path = config_path
@@ -152,6 +162,23 @@ class ModelManager:
         return str(model_section.get("id", DEFAULTS["model"]["id"]))
 
     def _load(self):
+        """Reads see the LAYERED config (shared + this machine's file +
+        config.local.yaml), not just config.yaml.
+
+        Without this, a machine whose model catalog lives in its own
+        per-machine file would serve a model that /v1/models does not
+        list and validate_model() rejects - observed exactly that after
+        moving this desktop's drift out of the shared file.
+
+        Only the default path is layered: a ModelManager constructed
+        against an explicit path (tests, tooling) reads that file alone,
+        so it stays isolated.
+
+        NOTE the asymmetry - writes still go to self.config_path. See the
+        class docstring.
+        """
+        if self.config_path == CONFIG_PATH:
+            return load_layered_config()
         return load_yaml_config(self.config_path)
 
     def _configured_model(self, model_id: str, raw_config: Optional[dict] = None):

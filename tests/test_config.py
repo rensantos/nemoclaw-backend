@@ -7,7 +7,7 @@ import config as config_module
 
 class ConfigEngineSelectionTests(unittest.TestCase):
     def _load(self, raw_config, env=None):
-        with mock.patch("config._load_yaml_config", return_value=raw_config):
+        with mock.patch("config.load_layered_config", return_value=raw_config):
             with mock.patch.dict(os.environ, env or {}, clear=True):
                 return config_module.load_config()
 
@@ -138,7 +138,7 @@ class InstanceIdentityTests(unittest.TestCase):
     so with several reachable at once there is no way to tell them apart."""
 
     def _load(self, raw_config, env=None):
-        with mock.patch("config._load_yaml_config", return_value=raw_config):
+        with mock.patch("config.load_layered_config", return_value=raw_config):
             with mock.patch.dict(os.environ, env or {}, clear=True):
                 return config_module.load_config()
 
@@ -167,9 +167,77 @@ class InstanceIdentityTests(unittest.TestCase):
         self.assertEqual(result.backend.instance, socket.gethostname())
 
 
+class InstanceConfigFileTests(unittest.TestCase):
+    """Per-machine config lives in config.<instance>.yaml, TRACKED, so every
+    machine's real configuration is versioned and readable from any other.
+    The filename carries the machine name precisely so the machines cannot
+    conflict with each other the way one shared filename would."""
+
+    def _load(self, base, machine=None, local=None, env=None, machine_file="config.zerob.yaml"):
+        def fake_load(path=config_module.CONFIG_PATH):
+            if path == config_module.CONFIG_PATH:
+                return base
+            if path == config_module.CONFIG_LOCAL_PATH:
+                return local or {}
+            if path.name == machine_file:
+                return machine or {}
+            return {}
+
+        with mock.patch("config.load_yaml_config", side_effect=fake_load):
+            with mock.patch.dict(os.environ, env or {"INSTANCE": "zerob"}, clear=True):
+                return config_module.load_config()
+
+    def test_machine_file_overrides_the_shared_file(self):
+        result = self._load({"backend": {"port": 8000, "gpu": "2,3"}}, machine={"backend": {"port": 8001}})
+
+        self.assertEqual(result.backend.port, 8001)
+        self.assertEqual(result.backend.gpu, "2,3", "untouched keys keep the shared value")
+
+    def test_local_untracked_file_beats_the_machine_file(self):
+        result = self._load({"backend": {"gpu": "2,3"}},
+                            machine={"backend": {"gpu": "0"}}, local={"backend": {"gpu": "1"}})
+
+        self.assertEqual(result.backend.gpu, "1")
+
+    def test_env_still_beats_every_file(self):
+        result = self._load({"backend": {"port": 8000}}, machine={"backend": {"port": 8001}},
+                            env={"INSTANCE": "zerob", "PORT": "8002"})
+
+        self.assertEqual(result.backend.port, 8002)
+
+    def test_a_machine_with_no_file_of_its_own_gets_the_shared_config(self):
+        result = self._load({"backend": {"port": 8000, "gpu": "2,3"}},
+                            machine={"backend": {"port": 9999}}, env={"INSTANCE": "unknown-machine"})
+
+        self.assertEqual(result.backend.port, 8000)
+        self.assertEqual(result.backend.gpu, "2,3")
+
+    def test_found_by_hostname_when_INSTANCE_is_not_set(self):
+        """A machine invoked without INSTANCE (./backend status, cron) must
+        still find its own file, or it would silently report a different GPU
+        and model than it actually serves."""
+        import socket
+
+        result = self._load({"backend": {"port": 8000}}, machine={"backend": {"port": 8001}},
+                            env={}, machine_file="config.{}.yaml".format(socket.gethostname()))
+
+        self.assertEqual(result.backend.port, 8001)
+
+    def test_candidate_filenames_include_the_short_hostname(self):
+        names = [p.name for p in config_module.instance_config_candidates("a4000.ipa.test")]
+
+        self.assertEqual(names, ["config.a4000.ipa.test.yaml", "config.a4000.yaml"])
+
+    def test_candidate_filenames_reject_path_traversal(self):
+        names = [p.name for p in config_module.instance_config_candidates("../../etc/passwd")]
+
+        for name in names:
+            self.assertNotIn("/", name)
+
+
 class LocalConfigOverlayTests(unittest.TestCase):
-    """config.yaml is tracked and shared; config.local.yaml is gitignored
-    and holds only what differs on this machine."""
+    """config.local.yaml stays supported as the untracked, highest-priority
+    layer for anything that must not be committed."""
 
     def _load(self, base, local, env=None):
         def fake_load(path=config_module.CONFIG_PATH):

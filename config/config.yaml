@@ -5,8 +5,9 @@ backend:
   # allocation is opportunistic, whoever needs a free card takes one, so
   # which indices are free changes over time and this value is only a
   # snapshot of what was idle when it was last set. Check what is
-  # actually free (`./backend gpu`) and set this per machine in
-  # config.local.yaml rather than assuming these indices are yours. A
+  # actually free (`./backend gpu`) and set this in THIS MACHINE's own
+  # config/config.<instance>.yaml rather than here - editing this shared
+  # file makes every machine disagree with it. A
   # comma-separated list lets device_map="auto" (fp16 only - see
   # model.quantization below) shard a model that doesn't fit a single
   # 16GB card across both. Known caveat: GPUManager

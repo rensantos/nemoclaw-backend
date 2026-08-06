@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -211,3 +212,29 @@ model:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LayeredReadTests(unittest.TestCase):
+    """ModelManager reads must see the per-machine layers, or a machine
+    serves a model that /v1/models does not list and validate_model()
+    rejects - observed exactly that after moving a desktop's drift out of
+    the shared config.yaml."""
+
+    def test_default_path_reads_the_layered_config(self):
+        layered = {"model": {"id": "deepseek-r1:14b",
+                             "available": [{"id": "deepseek-r1:14b", "path": "deepseek-r1:14b",
+                                            "engine": "ollama"}]}}
+
+        with mock.patch("services.model.load_layered_config", return_value=layered) as layered_loader:
+            ids = [m["id"] for m in ModelManager().available_models()]
+
+        layered_loader.assert_called()
+        self.assertEqual(ids, ["deepseek-r1:14b"])
+
+    def test_an_explicit_path_stays_isolated(self):
+        """Tests and tooling that name a file must read that file alone."""
+        with mock.patch("services.model.load_layered_config") as layered_loader:
+            with mock.patch("services.model.load_yaml_config", return_value={"model": {"available": []}}):
+                ModelManager(config_path=Path("/tmp/somewhere-else.yaml")).available_models()
+
+        layered_loader.assert_not_called()

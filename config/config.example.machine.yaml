@@ -1,0 +1,46 @@
+# Template for a PER-MACHINE config file.
+#
+# Copy to config/config.<name>.yaml where <name> is this machine's
+# hostname (found automatically) or the value of INSTANCE, then commit it.
+#
+#   cp config/config.example.machine.yaml config/config.$(hostname).yaml
+#
+# These files are TRACKED on purpose: every machine's real configuration
+# is then versioned and readable from any other machine. They cannot
+# conflict with each other because each machine only ever edits its own -
+# that is why the filename carries the machine name rather than all of
+# them sharing one path.
+#
+# Layering, lowest priority first:
+#   1. config/config.yaml              tracked, shared defaults
+#   2. config/config.<instance>.yaml   tracked, THIS machine  <- this file
+#   3. config/config.local.yaml        untracked, never committed
+#   4. environment variables           highest
+#
+# Set only what differs here; everything else falls through to the shared
+# file. A section you omit entirely is left completely untouched.
+#
+# KNOWN GAP: reads are layered, writes are not. A persisted `model switch`
+# or a model auto-registered after a pull still lands in the shared
+# config.yaml, not here.
+
+backend:
+  # Friendly name reported by GET /health; defaults to the hostname.
+  instance: my-machine
+  # 8000 is often the SSH tunnel to a remote node - a local backend needs
+  # its own port.
+  port: 8001
+  # Whichever card is actually free on this box. NOT a reservation:
+  # check `./backend gpu` rather than copying another machine's value.
+  gpu: "0"
+  engine: ollama
+  ollama_host: http://127.0.0.1:11434
+
+model:
+  id: hermes3:8b
+  # Replaces the shared catalog wholesale when present (lists are not
+  # merged element-wise). List what this machine has actually pulled.
+  available:
+    - id: hermes3:8b
+      path: hermes3:8b
+      engine: ollama

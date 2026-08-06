@@ -1,0 +1,35 @@
+# Per-machine config for this desktop ("Ze Rob"), layered over
+# config/config.yaml. Tracked on purpose: every machine's real
+# configuration is then versioned and readable from any other machine.
+# Only this machine edits this file, so it cannot conflict with UBI's or
+# the laptop's - that is why the filename carries the machine name.
+#
+# Found automatically by hostname (ESP-SROB-PCPROF), so it applies however
+# the backend is invoked - with or without INSTANCE set.
+
+backend:
+  # Friendlier name than the hostname; reported by GET /health.
+  instance: zerob
+  # 8000 is the SSH tunnel to UBI's backend on this machine, so the local
+  # one has to live elsewhere.
+  port: 8001
+  # Single RTX 3060 here, not UBI's 4x A4000.
+  gpu: "0"
+  engine: ollama
+  ollama_host: http://127.0.0.1:11434
+
+model:
+  id: deepseek-r1:14b
+  available:
+    - id: deepseek-r1:14b
+      path: deepseek-r1:14b
+      engine: ollama
+    - id: hermes3:8b
+      path: hermes3:8b
+      engine: ollama
+    - id: gemma4:26b
+      path: gemma4:26b
+      engine: ollama
+    - id: qwen3:14b
+      path: qwen3:14b
+      engine: ollama
