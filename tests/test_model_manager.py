@@ -430,6 +430,44 @@ model:
             self.assertIn("# This machine's own file.", written)
             self.assertIn("# The live default here.", written)
 
+    def test_a_per_machine_file_with_no_model_section_keeps_its_comments(self):
+        """UBI's real config.a4000.yaml is an instance name plus a long
+        comment explaining that GPU indices there are reserved to nobody.
+        It has no model: section, so the first persisted switch used to
+        re-dump the file and delete every one of those lines."""
+        ubi_shaped = (
+            "# This machine's per-instance overrides.\n"
+            "#\n"
+            "# gpu and model.id are deliberately left to the shared config:\n"
+            "# this box's cards are shared with other researchers and none\n"
+            "# is assigned to any project or person.\n"
+            "backend:\n"
+            "  # Friendly name reported by GET /health.\n"
+            "  instance: ubi\n"
+        )
+        with TemporaryDirectory() as tmp_dir:
+            shared = Path(tmp_dir) / "config.yaml"
+            per_machine = Path(tmp_dir) / "config.a4000.yaml"
+            shared.write_text(self.SHARED, encoding="utf-8")
+            per_machine.write_text(ubi_shaped, encoding="utf-8")
+
+            manager = ModelManager(installed_models_provider=lambda: ["other-model"])
+            with mock.patch.object(manager, "config_path", shared), \
+                 mock.patch.object(manager, "_write_path", return_value=per_machine), \
+                 mock.patch("services.model.load_layered_config",
+                            return_value={"model": {"id": "shared-default"}}):
+                manager.select_model("other-model")
+
+            written = per_machine.read_text(encoding="utf-8")
+            self.assertIn("assigned to any project", written)
+            self.assertIn("instance: ubi", written)
+            self.assertIn("other-model", written)
+            self.assertEqual(shared.read_text(encoding="utf-8"), self.SHARED)
+            # And the result must still be valid, loadable YAML.
+            self.assertEqual(
+                yaml.safe_load(written)["model"]["id"], "other-model"
+            )
+
     def test_without_a_per_machine_file_the_shared_one_is_still_written(self):
         """A machine that deliberately runs on the shared config keeps
         doing exactly that; this never invents a per-machine file."""

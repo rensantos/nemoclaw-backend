@@ -195,10 +195,27 @@ class ModelManager:
 
         Reads that ONE file (never the layered merge), so only keys this
         machine already declares plus the update survive.
+
+        A per-machine file with no model: section at all gets one APPENDED
+        as text rather than re-dumped. These files are hand-written and
+        comment-heavy - UBI's config.a4000.yaml is nothing but an instance
+        name and a long explanation of why GPU indices there are not
+        reserved to anyone - and yaml.safe_dump() would silently delete
+        every line of it on the first persisted model switch.
         """
         own = load_yaml_config(path) if path.exists() else {}
         if not isinstance(own, dict):
             own = {}
+
+        existing_model = own.get("model")
+        if path.exists() and not isinstance(existing_model, dict):
+            text = path.read_text(encoding="utf-8")
+            if text and not text.endswith("\n"):
+                text += "\n"
+            rendered = yaml.safe_dump({"model": dict(model_updates)}, sort_keys=False)
+            path.write_text("{}\n{}".format(text, rendered), encoding="utf-8")
+            return
+
         model_section = own.setdefault("model", {})
         if not isinstance(model_section, dict):
             raise ValueError("model section must be a YAML mapping")
