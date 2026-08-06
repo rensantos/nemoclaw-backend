@@ -192,6 +192,30 @@ def load_layered_config():
     return merged
 
 
+def active_instance_config_path() -> Optional[Path]:
+    """This machine's own per-machine config file, if it has one.
+
+    The same lookup load_layered_config() uses to decide which overlay to
+    READ, exposed so writes can target the same file instead of the shared
+    one. Returns None when this machine has no per-machine file, in which
+    case the shared config.yaml is genuinely the right place to write.
+
+    Only an existing file counts: creating one as a side effect of a model
+    switch would invent a tracked, committed file the operator never asked
+    for.
+    """
+    base = load_yaml_config()
+    seen: set[Path] = set()
+    for path in [*instance_config_candidates(_resolve_instance(base)),
+                 *instance_config_candidates(socket.gethostname())]:
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.exists() and load_yaml_config(path):
+            return path
+    return None
+
+
 def load_yaml_config(path: Path = CONFIG_PATH):
     if not path.exists():
         return {}

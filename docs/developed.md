@@ -270,6 +270,29 @@ Environment variables can override YAML values for one-off runs:
   catalog filtered to the active engine) with `loaded`/`pulled`/
   `size_mib`/`fits` flags, so a frontend picker can grey out what is not
   usable instead of offering choices that fail.
+- **The Ollama catalog comes from the daemon, not from YAML** (2026-08-06).
+  `ModelManager` unions `GET /api/tags` into `model.available`, so every
+  pulled tag is listed and selectable with nothing to register by hand.
+  The old allowlist drifted in both directions - live, this desktop had 16
+  tags installed and 4 catalogued, so `/model gemma4:12b` returned 404
+  "Model is not configured" for a model sitting on disk. The two halves
+  also contradicted each other: `register_model()` appends to the SHARED
+  `config.yaml`, but a per-machine `config.<instance>.yaml` REPLACES
+  `model.available` wholesale when layered, so the append was invisible to
+  the very next read and a switch would succeed against the engine then
+  fail while persisting. Discovery never raises (an unreachable daemon
+  degrades to whatever YAML says), caches for a few seconds, and is
+  injectable so tests never touch a real daemon.
+- **Config writes now follow the same layering as reads** (2026-08-06).
+  A persisted `model switch` lands in this machine's own
+  `config.<instance>.yaml` when it has one (`config.active_instance_config_path()`
+  → `ModelManager._write_path()`), never inventing that file if absent.
+  Writing to the shared file was both ineffective (the per-machine layer
+  overrode `model.id` on the next load) and disruptive: a real `git pull`
+  on the laptop aborted with "Your local changes to the following files
+  would be overwritten by merge: config/config.yaml", purely because model
+  switches on other machines had auto-written their `model.id` there.
+  Comment-preserving line editing is retained on the per-machine path.
 - `services/gpu_safety.py` owns start-time GPU policy:
   `GPUSafetyService.evaluate_start()` returns a `StartDecision`
   (`proceed`/`confirm`/`refuse`) that the CLI renders. Per-process VRAM

@@ -20,9 +20,12 @@
 # Set only what differs here; everything else falls through to the shared
 # file. A section you omit entirely is left completely untouched.
 #
-# KNOWN GAP: reads are layered, writes are not. A persisted `model switch`
-# or a model auto-registered after a pull still lands in the shared
-# config.yaml, not here.
+# Writes follow the same layering as reads (since 2026-08-06): a
+# persisted `model switch` lands in THIS file, not the shared
+# config.yaml. Before that they always hit the shared file, which was
+# both ineffective (this layer overrides model.id on the next load) and
+# disruptive - it dirtied a tracked file every other machine pulls, and
+# a real `git pull` on another machine aborted because of it.
 
 backend:
   # Friendly name reported by GET /health; defaults to the hostname.
@@ -38,9 +41,17 @@ backend:
 
 model:
   id: hermes3:8b
-  # Replaces the shared catalog wholesale when present (lists are not
-  # merged element-wise). List what this machine has actually pulled.
-  available:
-    - id: hermes3:8b
-      path: hermes3:8b
-      engine: ollama
+  # `available:` is usually unnecessary for an Ollama backend: the
+  # selectable catalog is read from the daemon itself, so whatever is
+  # pulled on this machine is already selectable and nothing needs
+  # registering by hand.
+  #
+  # Set it ONLY to pin extra metadata for a specific model. Be aware it
+  # REPLACES the shared catalog wholesale when present (lists are not
+  # merged element-wise) - a partial list here used to make pulled-but-
+  # unlisted models unselectable, which is exactly the drift live
+  # discovery removed.
+  #available:
+  #  - id: hermes3:8b
+  #    path: hermes3:8b
+  #    engine: ollama

@@ -19,17 +19,15 @@ backend:
   ollama_host: http://127.0.0.1:11434
 
 model:
-  id: deepseek-r1:14b
-  available:
-    - id: deepseek-r1:14b
-      path: deepseek-r1:14b
-      engine: ollama
-    - id: hermes3:8b
-      path: hermes3:8b
-      engine: ollama
-    - id: gemma4:26b
-      path: gemma4:26b
-      engine: ollama
-    - id: qwen3:14b
-      path: qwen3:14b
-      engine: ollama
+  id: gemma4:12b
+  # No `available:` list on purpose. ModelManager derives the selectable
+  # catalog from the Ollama daemon itself, so whatever is pulled here is
+  # selectable and nothing needs registering by hand. A hand-maintained
+  # list was briefly synced here (16 tags) and then removed once
+  # discovery landed - keeping one would only reintroduce the drift it
+  # replaced, and a per-machine `available:` REPLACES the shared catalog
+  # wholesale during layering, which is what made a pulled-but-unlisted
+  # gemma4:12b unselectable in the first place.
+  #
+  # Add an `available:` entry here only to pin extra metadata for a
+  # specific model, never as the source of truth for which exist.
