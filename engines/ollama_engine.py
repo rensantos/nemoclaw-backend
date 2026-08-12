@@ -41,7 +41,19 @@ _TAGS_TIMEOUT_SECONDS = 5
 # probe. Distinct, generous fixed timeout; making this operator-configurable
 # is deferred (docs/ollama-engine-design.md Section 7, "Timeout behavior" -
 # resolved here for Increment 3 as a fixed value, not full configurability).
-_GENERATE_TIMEOUT_SECONDS = 120
+# Prompt processing scales with context length, so this is not a "should
+# never take longer" bound - it is a cap on how much context is usable at
+# all. Measured 2026-08-12: a filled 32768-token prompt took 84s on UBI
+# and a filled 65536 took longer than 120s, so the old hardcoded 120
+# silently capped both machines well below what their hardware could
+# serve. Both ceilings recorded that day as memory limits were this
+# timeout: Ollama's own log showed the 65536 model loading fully across
+# four GPUs (58.9 GiB of 62.4 available) and then being cut off with
+# "context canceled" at exactly 120s.
+#
+# Overridable so a slow machine or a very large context is a config
+# change rather than a code change.
+_GENERATE_TIMEOUT_SECONDS = int(os.environ.get("NEMOCLAW_GENERATE_TIMEOUT_SECONDS", "1800"))
 
 # Multiplier from a tag's on-disk size to the VRAM Ollama actually needs
 # to serve it fully on GPU. See OllamaEngine.estimated_vram_mib().
