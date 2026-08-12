@@ -100,6 +100,7 @@ class InferenceEngine(ABC):
         temperature: Optional[float],
         requested_model: Optional[str] = None,
         think: Optional[bool] = None,
+        num_ctx: Optional[int] = None,
     ):
         """Yields incremental chat deltas.
 
@@ -203,6 +204,7 @@ class InferenceEngine(ABC):
         temperature: Optional[float],
         requested_model: Optional[str] = None,
         think: Optional[bool] = None,
+        num_ctx: Optional[int] = None,
     ):
         pass
 

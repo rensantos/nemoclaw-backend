@@ -148,9 +148,10 @@ class TransformersEngine(InferenceEngine):
         temperature: Optional[float],
         requested_model: Optional[str] = None,
         think: Optional[bool] = None,
+        num_ctx: Optional[int] = None,
     ):
-        # requested_model and think are accepted for interface parity with
-        # OllamaEngine but intentionally unused: fixing this engine's
+        # requested_model, think and num_ctx are accepted for interface
+        # parity with OllamaEngine but intentionally unused: fixing this engine's
         # echo-and-serve quirk is out of scope (docs/ollama-engine-design.md
         # Section 1), and there's no reasoning-mode concept here at all.
         self.load_model()

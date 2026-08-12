@@ -187,11 +187,11 @@ class InferenceService:
         model_object.update(runtime_info.get(model_id, {}))
         return model_object
 
-    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None, num_ctx=None):
         with self._serving():
             try:
                 return self.engine.chat(
-                    messages, max_tokens, temperature, requested_model, think
+                    messages, max_tokens, temperature, requested_model, think, num_ctx
                 )
             except EngineUnavailableError:
                 self.lifecycle_state = LifecycleState.DEGRADED
@@ -334,7 +334,7 @@ class InferenceService:
         ).snapshot()
 
     def chat_stream(
-        self, messages, max_tokens, temperature, requested_model=None, think=None
+        self, messages, max_tokens, temperature, requested_model=None, think=None, num_ctx=None
     ):
         """Returns an iterator of chat deltas, holding a request slot for
         the whole stream.
@@ -364,7 +364,7 @@ class InferenceService:
         # inside the _serving() slot below.
         try:
             deltas = self.engine.chat_stream(
-                messages, max_tokens, temperature, requested_model, think
+                messages, max_tokens, temperature, requested_model, think, num_ctx
             )
         except EngineUnavailableError:
             self.lifecycle_state = LifecycleState.DEGRADED

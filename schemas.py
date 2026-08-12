@@ -21,6 +21,15 @@ class ChatCompletionRequest(BaseModel):
     # model.think_default from config", which itself defaults to None
     # ("don't send think at all, let Ollama use its own default").
     think: Optional[bool] = None
+    # OllamaEngine-only, same as `think`. The context window to serve this
+    # request with. None means "don't send it", leaving Ollama on its own
+    # default of 4096 - and that default silently truncated every request
+    # this backend served until 2026-08-12: a caller could send 100k tokens
+    # of context and the model would read the last 4096, with nothing in
+    # the response saying so. `options` is not part of the OpenAI
+    # chat-completions schema, so a caller has no other way to express
+    # this; it needs a first-class field here.
+    num_ctx: Optional[int] = None
 
 
 class GenerateRequest(BaseModel):

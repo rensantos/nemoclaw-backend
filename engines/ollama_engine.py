@@ -557,6 +557,7 @@ class OllamaEngine(InferenceEngine):
         temperature: Optional[float],
         requested_model: Optional[str] = None,
         think: Optional[bool] = None,
+        num_ctx: Optional[int] = None,
     ):
         self._check_requested_model(requested_model)
         max_new_tokens = (
@@ -570,6 +571,7 @@ class OllamaEngine(InferenceEngine):
             "stream": False,
             "options": {"temperature": temp, "num_predict": max_new_tokens},
         }
+        self._apply_num_ctx(payload, num_ctx)
         self._apply_think(payload, think)
         response = self._post("/api/chat", payload)
         message = response.get("message") or {}
@@ -593,6 +595,7 @@ class OllamaEngine(InferenceEngine):
         temperature: Optional[float],
         requested_model: Optional[str] = None,
         think: Optional[bool] = None,
+            num_ctx: Optional[int] = None,
     ):
         """Streams deltas from Ollama's NDJSON /api/chat.
 
@@ -634,6 +637,7 @@ class OllamaEngine(InferenceEngine):
             "stream": True,
             "options": {"temperature": temp, "num_predict": max_new_tokens},
         }
+        self._apply_num_ctx(payload, num_ctx)
         self._apply_think(payload, think)
 
         return self._chat_deltas(payload, "thinking" in self.model_capabilities())
@@ -797,6 +801,27 @@ class OllamaEngine(InferenceEngine):
         )
         if effective_think is not None:
             payload["think"] = effective_think
+
+    def _apply_num_ctx(self, payload: dict, num_ctx: Optional[int]) -> None:
+        """Sets payload["options"]["num_ctx"] when the caller asked for one.
+
+        Unlike `think`, this goes INSIDE "options" - that is where Ollama
+        reads it. Omitted entirely when unset, so Ollama keeps its own
+        default and nothing changes for callers that do not ask.
+
+        Why this exists: that Ollama default is 4096, and until 2026-08-12
+        this backend never sent num_ctx at all, so every request it served
+        was silently truncated to 4096 tokens regardless of what the caller
+        assembled. Measured against a ~40k-token prompt, this backend
+        reported prompt_tokens=4096 while the same prompt sent straight to
+        Ollama with options.num_ctx processed 26,046.
+
+        Non-positive values are ignored rather than forwarded: 0 or a
+        negative would be a caller bug, and Ollama's behaviour for them is
+        not something to inherit silently.
+        """
+        if num_ctx is not None and num_ctx > 0:
+            payload.setdefault("options", {})["num_ctx"] = num_ctx
 
     def _usage(self, response: dict):
         prompt_tokens = response.get("prompt_eval_count")

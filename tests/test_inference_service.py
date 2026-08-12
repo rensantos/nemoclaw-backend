@@ -58,7 +58,8 @@ class FakeEngine:
         self.calls.append("list_models")
         return {"object": "list", "data": []}
 
-    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
         self.calls.append(
             ("chat", messages, max_tokens, temperature, requested_model, think)
         )
@@ -224,7 +225,8 @@ class InferenceServiceTests(unittest.TestCase):
 
     def test_chat_transitions_to_degraded_on_engine_unavailable(self):
         class UnavailableEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
                 raise EngineUnavailableError("daemon down")
 
         service = InferenceService(UnavailableEngine())
@@ -248,7 +250,8 @@ class InferenceServiceTests(unittest.TestCase):
 
     def test_chat_propagates_model_not_found_without_changing_lifecycle(self):
         class RejectingEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
                 raise ModelNotFoundError(requested_model, "servable-model")
 
         service = InferenceService(RejectingEngine())
@@ -585,7 +588,8 @@ class LifecycleRequestRejectionTests(unittest.TestCase):
         entered = threading.Event()
 
         class SlowEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
                 entered.set()
                 release.wait(5)
                 return super().chat(messages, max_tokens, temperature, requested_model, think)
@@ -624,7 +628,8 @@ class LifecycleRequestRejectionTests(unittest.TestCase):
         entered = threading.Event()
 
         class SlowEngine(FakeEngine):
-            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
+            def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
                 entered.set()
                 release.wait(5)
                 return super().chat(messages, max_tokens, temperature, requested_model, think)
@@ -809,7 +814,7 @@ class StreamingTests(unittest.TestCase):
         supports_streaming = True
 
         def chat_stream(self, messages, max_tokens, temperature,
-                        requested_model=None, think=None):
+                        requested_model=None, think=None, num_ctx=None):
             self.calls.append(("chat_stream", requested_model, think))
             yield {"reasoning": "pondering"}
             yield {"content": "Lis"}
@@ -851,7 +856,7 @@ class StreamingTests(unittest.TestCase):
             supports_streaming = True
 
             def chat_stream(self, messages, max_tokens, temperature,
-                            requested_model=None, think=None):
+                            requested_model=None, think=None, num_ctx=None):
                 if requested_model not in (None, "qwen3:30b"):
                     raise ModelNotFoundError(requested_model, "qwen3:30b")
                 return iter([{"content": "ok"}])

@@ -178,7 +178,7 @@ def chat_completions(
     if req.stream:
         try:
             deltas = service.chat_stream(
-                req.messages, req.max_tokens, req.temperature, req.model, req.think
+                req.messages, req.max_tokens, req.temperature, req.model, req.think, req.num_ctx
             )
         except StreamingNotSupportedError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -198,7 +198,7 @@ def chat_completions(
 
     try:
         result = service.chat(
-            req.messages, req.max_tokens, req.temperature, req.model, req.think
+            req.messages, req.max_tokens, req.temperature, req.model, req.think, req.num_ctx
         )
     except ModelNotFoundError as exc:
         return _model_not_found_response(exc)

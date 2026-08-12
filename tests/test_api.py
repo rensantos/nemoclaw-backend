@@ -72,15 +72,16 @@ class FakeService:
         return {"object": "list", "data": [{"id": "qwen3:30b", "object": "model",
                                             "created": 0, "owned_by": "ollama"}]}
 
-    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None):
-        self.calls.append(("chat", requested_model, think))
+    def chat(self, messages, max_tokens, temperature, requested_model=None, think=None,
+             num_ctx=None):
+        self.calls.append(("chat", requested_model, think, num_ctx))
         if self.chat_error:
             raise self.chat_error
         return self.chat_result
 
     def chat_stream(self, messages, max_tokens, temperature, requested_model=None,
-                    think=None):
-        self.calls.append(("chat_stream", requested_model, think))
+                    think=None, num_ctx=None):
+        self.calls.append(("chat_stream", requested_model, think, num_ctx))
         if self.stream_error:
             raise self.stream_error
         return iter(self.deltas)
@@ -166,6 +167,43 @@ class ApiRequestTests(unittest.TestCase):
         self.assertEqual(body["object"], "chat.completion")
         self.assertEqual(body["choices"][0]["message"]["content"], "Lisbon")
         self.assertEqual(body["usage"]["total_tokens"], 4)
+
+    def test_num_ctx_reaches_the_service(self):
+        """The whole point of the field. Until 2026-08-12 there was no way
+        for a caller to set a context window at all - `options` is not part
+        of the OpenAI chat-completions schema - so every request ran at
+        Ollama's 4096 default and long prompts were silently truncated."""
+        self.client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "num_ctx": 65536},
+        )
+
+        chat_calls = [c for c in self.service.calls if c[0] == "chat"]
+        self.assertEqual(chat_calls[-1][3], 65536)
+
+    def test_num_ctx_is_optional_and_defaults_to_not_sending_one(self):
+        """Callers that do not ask must be unaffected, so Ollama keeps its
+        own default rather than this becoming a new implicit policy."""
+        self.client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+        chat_calls = [c for c in self.service.calls if c[0] == "chat"]
+        self.assertIsNone(chat_calls[-1][3])
+
+    def test_num_ctx_reaches_the_service_when_streaming_too(self):
+        """The streaming path is a separate call site and was the one more
+        likely to be forgotten."""
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "stream": True, "num_ctx": 32768},
+        ) as response:
+            list(response.iter_lines())
+
+        stream_calls = [c for c in self.service.calls if c[0] == "chat_stream"]
+        self.assertEqual(stream_calls[-1][3], 32768)
 
     def test_reasoning_is_omitted_when_absent_and_present_when_not(self):
         response = self.client.post(
