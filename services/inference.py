@@ -106,6 +106,17 @@ class InferenceService:
         # local one plus SSH-tunnelled remotes) could not tell them apart
         # except by guessing from the model or GPU name.
         health["instance"] = settings.backend.instance
+        # The loaded model's own maximum context. Published so a client
+        # never has to carry this number in its own config, where it goes
+        # stale the moment the model changes - which is exactly what
+        # happened: the frontend held a hand-set figure for a model this
+        # machine no longer ran. 0 means "could not tell", never "none".
+        try:
+            health["context_length"] = self.engine.model_context_length()
+        except Exception:
+            # Health must stay answerable even when this probe cannot be
+            # made; an unknown context window is not a reason to look down.
+            health["context_length"] = 0
         return health
 
     def list_models(self):

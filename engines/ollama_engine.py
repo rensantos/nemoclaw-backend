@@ -709,6 +709,42 @@ class OllamaEngine(InferenceEngine):
         capabilities = shown.get("capabilities")
         return capabilities if isinstance(capabilities, list) else []
 
+    def model_context_length(self, model_id: Optional[str] = None) -> int:
+        """The loaded model's own maximum context, from POST /api/show.
+
+        0 when unknown, which callers must read as "could not tell" rather
+        than "no context" - it is a signal to fall back, never a value to
+        request.
+
+        Exists so nobody has to write this number down. It is a property
+        of the model and it changes whenever the loaded model changes, so
+        every copy of it in a config file is a stale cache waiting to be
+        wrong: the frontend carried a hand-set 131072 for a machine that
+        had since switched models, and a 32768 measured for a model no
+        longer loaded. The daemon holding the weights is the only thing
+        that actually knows.
+
+        The key is architecture-prefixed (qwen3moe.context_length,
+        llama.context_length, ...), so match on the suffix rather than
+        guessing the prefix; take the max when several are present.
+        """
+        target = self.model_id if model_id is None else model_id
+        try:
+            shown = self._post("/api/show", {"model": target})
+        except EngineUnavailableError:
+            return 0
+        info = shown.get("model_info")
+        if not isinstance(info, dict):
+            return 0
+        lengths = []
+        for key, value in info.items():
+            if str(key).endswith(".context_length"):
+                try:
+                    lengths.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+        return max(lengths) if lengths else 0
+
     def generate_text(
         self,
         prompt: str,

@@ -196,6 +196,13 @@ class InferenceEngine(ABC):
     def list_models(self):
         pass
 
+    def model_context_length(self, model_id=None) -> int:
+        """The model's own maximum context, or 0 when this engine cannot
+        tell. Not abstract: 0 is a truthful answer for an engine with no
+        way to ask, and callers already have to handle it.
+        """
+        return 0
+
     @abstractmethod
     def chat(
         self,
