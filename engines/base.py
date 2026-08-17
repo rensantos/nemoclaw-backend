@@ -203,6 +203,20 @@ class InferenceEngine(ABC):
         """
         return 0
 
+    def servable_context_length(self, model_id=None) -> int:
+        """The largest context THIS MACHINE can hold right now, or 0 when
+        this engine cannot tell.
+
+        Distinct from model_context_length(), which reports what the model
+        supports. The hardware in front of it may not be able to serve
+        that: a model declaring 262,144 can need 41.1 GiB of KV cache on a
+        machine with 32 GiB. Conflating the two degraded nodes repeatedly.
+
+        Not abstract, and 0 is truthful for an engine that cannot measure
+        its host - callers fall back rather than trusting a guess.
+        """
+        return 0
+
     @abstractmethod
     def chat(
         self,

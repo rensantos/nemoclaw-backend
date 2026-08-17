@@ -117,6 +117,21 @@ class InferenceService:
             # Health must stay answerable even when this probe cannot be
             # made; an unknown context window is not a reason to look down.
             health["context_length"] = 0
+        # What this MACHINE can actually serve, as opposed to what the
+        # model supports. The two differ by a lot and conflating them is
+        # what degraded nodes repeatedly - qwen3:30b declares 262,144 and
+        # needs 41.1 GiB of KV cache to use it on a box with ~32 GiB.
+        #
+        # Reported from here because the backend is the component standing
+        # on the hardware. Every machine runs its own backend beside its
+        # frontend, and UBI runs a backend with NO frontend - so this is
+        # the only place that can answer for every node with one
+        # implementation.
+        try:
+            servable = self.engine.servable_context_length()
+        except Exception:
+            servable = 0
+        health["servable_context_length"] = servable
         return health
 
     def list_models(self):

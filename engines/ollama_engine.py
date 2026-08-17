@@ -55,6 +55,28 @@ _TAGS_TIMEOUT_SECONDS = 5
 # change rather than a code change.
 _GENERATE_TIMEOUT_SECONDS = int(os.environ.get("NEMOCLAW_GENERATE_TIMEOUT_SECONDS", "1800"))
 
+# KV cache element size. Ollama defaults to fp16 unless cache
+# quantisation is configured; over-estimating yields a smaller window
+# that still works, under-estimating degrades the backend.
+_KV_CACHE_BYTES_PER_ELEMENT = 2
+
+# Left free beyond model + KV cache for activations, the runtime, and
+# whatever else shares the machine. Observed failures landed within
+# ~1.5 GB of the limit, so this is deliberately generous.
+_CONTEXT_MEMORY_HEADROOM_BYTES = 3 * 1024 ** 3
+
+
+def _available_memory_bytes() -> int:
+    """Free system memory, from /proc/meminfo. 0 if it cannot be read."""
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return 0
+    return 0
+
 # Multiplier from a tag's on-disk size to the VRAM Ollama actually needs
 # to serve it fully on GPU. See OllamaEngine.estimated_vram_mib().
 VRAM_OVERHEAD_FACTOR = 1.5
@@ -757,6 +779,93 @@ class OllamaEngine(InferenceEngine):
                     continue
         return max(lengths) if lengths else 0
 
+    def servable_context_length(self, model_id: Optional[str] = None) -> int:
+        """The largest context THIS MACHINE can actually hold right now.
+
+        model_context_length() reports what the model supports; this
+        reports what the hardware in front of it can serve. They are not
+        the same number, and treating them as one is what degraded nodes
+        repeatedly: qwen3:30b declares 262,144 and needs 41.1 GiB of KV
+        cache to use it, on a box with ~32 GiB.
+
+        Computed, never configured, because it depends on the loaded MODEL
+        and the FREE MEMORY together and both move: /model swaps the model
+        from a chat message, and another user's job takes memory on a
+        shared machine. Any number written into a file is stale the moment
+        either changes - which is why the frontend's per-node NUM_CTX
+        settings ended up either throttling nodes or crashing them.
+
+        This belongs here rather than in the frontend because the backend
+        is the component standing on the hardware. Every machine runs its
+        own backend beside its frontend, so a local answer is available
+        either way - but UBI runs a backend with NO frontend, and only
+        this side can answer for it.
+
+            kv_bytes_per_token = layers * kv_heads * (key_len + value_len) * 2
+            servable = (free + reclaimable - model_size - headroom) / kv_per_token
+
+        Returns 0 when any input is unknown, which callers must read as
+        "could not tell" and fall back, never as "no context".
+        """
+        target = self.model_id if model_id is None else model_id
+        try:
+            shown = self._post("/api/show", {"model": target})
+        except EngineUnavailableError:
+            return 0
+        info = shown.get("model_info")
+        if not isinstance(info, dict):
+            return 0
+
+        def field(suffix: str) -> int:
+            for key, value in info.items():
+                if str(key).endswith(suffix):
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return 0
+            return 0
+
+        layers = field(".block_count")
+        kv_heads = field(".attention.head_count_kv")
+        key_len = field(".attention.key_length")
+        value_len = field(".attention.value_length") or key_len
+        if not (layers and kv_heads and key_len):
+            return 0
+        kv_per_token = layers * kv_heads * (key_len + value_len) * _KV_CACHE_BYTES_PER_ELEMENT
+
+        model_max = self.model_context_length(target)
+        if model_max <= 0:
+            return 0
+
+        available = _available_memory_bytes()
+        if available <= 0:
+            return 0
+
+        # Weights already resident are reclaimable: the model is reloaded
+        # at the new context, not loaded a second time. Counting them as
+        # unavailable understates the window badly - measured on the
+        # frontend prototype, it turned a real ~90k into 16k.
+        model_bytes = 0
+        resident_bytes = 0
+        try:
+            for entry in self._get_tags().get("models") or []:
+                if entry.get("name") == target or entry.get("model") == target:
+                    model_bytes = int(entry.get("size") or 0)
+                    break
+            for entry in self._get_running().get("models") or []:
+                if entry.get("name") == target or entry.get("model") == target:
+                    resident_bytes = int(entry.get("size") or 0)
+                    break
+        except EngineUnavailableError:
+            return 0
+        if model_bytes <= 0:
+            return 0
+
+        usable = available + resident_bytes - model_bytes - _CONTEXT_MEMORY_HEADROOM_BYTES
+        if usable <= 0:
+            return 0
+        return max(0, min(model_max, usable // kv_per_token))
+
     def generate_text(
         self,
         prompt: str,
@@ -896,6 +1005,12 @@ class OllamaEngine(InferenceEngine):
     def _get_tags(self) -> dict:
         request = urllib.request.Request("{}/api/tags".format(self.base_url))
         return self._request(request, _TAGS_TIMEOUT_SECONDS, "/api/tags")
+
+    def _get_running(self) -> dict:
+        """GET /api/ps - models resident right now, with their real
+        in-memory size (weights plus any cache already allocated)."""
+        request = urllib.request.Request("{}/api/ps".format(self.base_url))
+        return self._request(request, _TAGS_TIMEOUT_SECONDS, "/api/ps")
 
     def _post(self, path: str, payload: dict) -> dict:
         body = json.dumps(payload).encode("utf-8")
