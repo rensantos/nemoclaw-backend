@@ -66,14 +66,25 @@ class ServableContextTests(unittest.TestCase):
         of protecting it - the other half of the failure."""
         self.assertGreater(self._servable(int(30 * GB)), 90000)
 
-    def test_resident_weights_are_reclaimable(self):
-        """A loaded model is reloaded at the new context, not loaded a
-        second time, so its memory is available. Counting it as gone
-        understates the window badly - measured on the frontend
-        prototype, it turned a real ~90k into 16k."""
-        without = self._servable(int(12 * GB), resident=0)
-        with_resident = self._servable(int(12 * GB), resident=int(18.6 * GB))
-        self.assertGreater(with_resident, without)
+    def test_resident_weights_are_not_treated_as_reclaimable(self):
+        """The opposite of what this test asserted at first. Treating a
+        loaded model's memory as free is plausible - it is reloaded at the
+        new context, not loaded twice - and empirically wrong: it produced
+        262,144 on a machine where 104,312 had just degraded the backend,
+        because MemAvailable already counts reclaimable page cache that a
+        large contiguous allocation cannot use.
+
+        Whether a model happens to be resident must not change the answer."""
+        without = self._servable(int(29 * GB), resident=0)
+        with_resident = self._servable(int(29 * GB), resident=int(18.5 * GB))
+        self.assertEqual(with_resident, without)
+
+    def test_it_matches_every_measurement_on_the_reference_machine(self):
+        """29 GB free, a 17.3 GB model, 98,304 bytes/token. Measured:
+        96,156 worked; 104,312 and 131,072 both degraded the backend."""
+        window = self._servable(int(29 * GB), tags_size=int(17.3 * GB))
+        self.assertGreater(window, 90000, "must not throttle below what works")
+        self.assertLess(window, 104312, "must not offer what degraded the node")
 
     def test_a_smaller_model_gets_a_bigger_window(self):
         """The property no configured number can express: /model changes

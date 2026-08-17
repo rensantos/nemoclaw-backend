@@ -841,27 +841,30 @@ class OllamaEngine(InferenceEngine):
         if available <= 0:
             return 0
 
-        # Weights already resident are reclaimable: the model is reloaded
-        # at the new context, not loaded a second time. Counting them as
-        # unavailable understates the window badly - measured on the
-        # frontend prototype, it turned a real ~90k into 16k.
+        # Resident weights are NOT treated as reclaimable. The reasoning
+        # that they are - "the model is reloaded at the new context, not
+        # loaded twice" - is plausible and empirically wrong: adding them
+        # back produced 262,144 on a machine where 104,312 had just
+        # degraded the backend, because MemAvailable is already optimistic
+        # (it counts reclaimable page cache that a large contiguous
+        # allocation cannot actually use).
+        #
+        # Without the add-back the formula matches every measurement on
+        # this machine: it yields ~95k, and 96,156 worked while 104,312
+        # and 131,072 both failed. Measurement wins over the model of the
+        # world that contradicts it.
         model_bytes = 0
-        resident_bytes = 0
         try:
             for entry in self._get_tags().get("models") or []:
                 if entry.get("name") == target or entry.get("model") == target:
                     model_bytes = int(entry.get("size") or 0)
-                    break
-            for entry in self._get_running().get("models") or []:
-                if entry.get("name") == target or entry.get("model") == target:
-                    resident_bytes = int(entry.get("size") or 0)
                     break
         except EngineUnavailableError:
             return 0
         if model_bytes <= 0:
             return 0
 
-        usable = available + resident_bytes - model_bytes - _CONTEXT_MEMORY_HEADROOM_BYTES
+        usable = available - model_bytes - _CONTEXT_MEMORY_HEADROOM_BYTES
         if usable <= 0:
             return 0
         return max(0, min(model_max, usable // kv_per_token))
