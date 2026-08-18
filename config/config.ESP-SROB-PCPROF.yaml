@@ -19,7 +19,7 @@ backend:
   ollama_host: http://127.0.0.1:11434
 
 model:
-  id: gemma4:12b
+  id: qwen3:30b-a3b
   # No `available:` list on purpose. ModelManager derives the selectable
   # catalog from the Ollama daemon itself, so whatever is pulled here is
   # selectable and nothing needs registering by hand. A hand-maintained
