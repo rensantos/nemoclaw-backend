@@ -68,10 +68,26 @@ _GENERATE_TIMEOUT_SECONDS = int(os.environ.get("NEMOCLAW_GENERATE_TIMEOUT_SECOND
 # project's claim-similarity scoring), an idle gap over that default is
 # exactly what evicts one to reload the other - a real reload was
 # observed within ~15 minutes of a model's last use on a real run.
-# Deliberately generous and not per-request configurable: nothing here
-# needs finer control than "stay loaded through a normal gap between
-# calls," only a longer floor than Ollama's own default.
-_KEEP_ALIVE = os.environ.get("NEMOCLAW_OLLAMA_KEEP_ALIVE", "30m")
+#
+# -1 (persist indefinitely, Ollama's own documented value for "never
+# auto-unload") rather than a finite guess like "30m": a first version
+# of this fix picked 30 minutes, and that is exactly the same mistake
+# this whole timeout-tuning effort has been about all along - a number
+# that describes the LAST failure's gap, not a guarantee against the
+# next one. A run legitimately slower than the guess would still get
+# evicted mid-run for no real reason. There is no such failure mode with
+# -1: the model simply never auto-expires. The other half of the design
+# is unload_model() below (keep_alive: 0), already wired into the model
+# switch and give-up-from-degraded paths - so memory is reclaimed
+# through an explicit decision (switching models, or the operator/system
+# deciding a run is done), never through a guessed idle timer.
+_KEEP_ALIVE_RAW = os.environ.get("NEMOCLAW_OLLAMA_KEEP_ALIVE", "-1")
+try:
+    _KEEP_ALIVE = int(_KEEP_ALIVE_RAW)
+except ValueError:
+    # A duration string ("30m", "1h") is still accepted for an operator
+    # who deliberately wants a bounded window instead of the default.
+    _KEEP_ALIVE = _KEEP_ALIVE_RAW
 
 # KV cache element size. Ollama defaults to fp16 unless cache
 # quantisation is configured; over-estimating yields a smaller window

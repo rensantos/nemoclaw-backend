@@ -10,6 +10,14 @@ own. On a node that alternates between a chat model and an embedding
 model (claim-similarity scoring), an idle gap past that default is
 exactly what evicts one to reload the other - a real reload was observed
 within ~15 minutes of a model's last use on a real run.
+
+The default is -1 (persist indefinitely), not a finite duration. A first
+version picked "30m" - a guess at "long enough" that carries the same
+risk every timeout guess in this project has: a run legitimately slower
+than the guess still gets evicted mid-run for no real reason. -1 has no
+such failure mode. Reclaiming memory is unload_model()'s job
+(keep_alive: 0), already wired into the model-switch and
+give-up-from-degraded paths - an explicit decision, not a guessed timer.
 """
 
 import types
@@ -45,11 +53,19 @@ def _make_config(model_id="test-model"):
     )
 
 
+class KeepAliveDefaultsToNeverExpireTests(unittest.TestCase):
+    """The specific behaviour a finite guess (a first version's "30m")
+    does not have: no idle window, however long, can evict the model
+    while nothing has explicitly asked for that memory back."""
+
+    def test_default_is_persist_indefinitely_not_a_finite_guess(self):
+        self.assertEqual(_KEEP_ALIVE, -1)
+
+
 class KeepAliveReachesEveryOllamaCallTests(unittest.TestCase):
-    """_KEEP_ALIVE defaults to "30m" - well past a normal gap between
-    /deepweb sources - and every payload this engine sends must carry it,
-    not just some of them, since a single un-covered call site is enough
-    for Ollama to fall back to its own 5-minute default on that path."""
+    """Every payload this engine sends must carry _KEEP_ALIVE, not just
+    some of them, since a single un-covered call site is enough for
+    Ollama to fall back to its own 5-minute default on that path."""
 
     def _engine(self):
         return OllamaEngine(_make_config())
