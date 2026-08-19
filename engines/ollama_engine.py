@@ -55,6 +55,24 @@ _TAGS_TIMEOUT_SECONDS = 5
 # change rather than a code change.
 _GENERATE_TIMEOUT_SECONDS = int(os.environ.get("NEMOCLAW_GENERATE_TIMEOUT_SECONDS", "1800"))
 
+# How long Ollama keeps a model resident after this engine's last request
+# to it. Sent on every chat/generate/embed call because nothing here ever
+# sent one before - Ollama then applied its own compiled-in 5-minute
+# default regardless of what a caller's frontend intended. Found live
+# 2026-08-19: the calling frontend (nemoclaw-research-assistant) sets
+# OLLAMA_KEEP_ALIVE=10m expecting it to reach Ollama, but its own
+# OpenAI-compatible client path drops that field before it ever leaves
+# the frontend process, and this engine never re-added one of its own -
+# so every request actually ran on Ollama's 5-minute default. On a node
+# that alternates between a chat model and an embedding model (this
+# project's claim-similarity scoring), an idle gap over that default is
+# exactly what evicts one to reload the other - a real reload was
+# observed within ~15 minutes of a model's last use on a real run.
+# Deliberately generous and not per-request configurable: nothing here
+# needs finer control than "stay loaded through a normal gap between
+# calls," only a longer floor than Ollama's own default.
+_KEEP_ALIVE = os.environ.get("NEMOCLAW_OLLAMA_KEEP_ALIVE", "30m")
+
 # KV cache element size. Ollama defaults to fp16 unless cache
 # quantisation is configured; over-estimating yields a smaller window
 # that still works, under-estimating degrades the backend.
@@ -603,6 +621,7 @@ class OllamaEngine(InferenceEngine):
             "model": self.model_id,
             "messages": self._message_dicts(messages),
             "stream": False,
+            "keep_alive": _KEEP_ALIVE,
             "options": {"temperature": temp, "num_predict": max_new_tokens},
         }
         self._apply_num_ctx(payload, num_ctx)
@@ -669,6 +688,7 @@ class OllamaEngine(InferenceEngine):
             "model": self.model_id,
             "messages": self._message_dicts(messages),
             "stream": True,
+            "keep_alive": _KEEP_ALIVE,
             "options": {"temperature": temp, "num_predict": max_new_tokens},
         }
         self._apply_num_ctx(payload, num_ctx)
@@ -880,6 +900,7 @@ class OllamaEngine(InferenceEngine):
             "model": self.model_id,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": _KEEP_ALIVE,
             "options": {"temperature": temperature, "num_predict": max_new_tokens},
         }
         self._apply_think(payload, think)
@@ -907,7 +928,9 @@ class OllamaEngine(InferenceEngine):
         if not texts:
             return []
         try:
-            response = self._post("/api/embed", {"model": model, "input": list(texts)})
+            response = self._post(
+                "/api/embed", {"model": model, "input": list(texts), "keep_alive": _KEEP_ALIVE}
+            )
             vectors = response.get("embeddings")
             if isinstance(vectors, list) and len(vectors) == len(texts):
                 return [list(vector) for vector in vectors]
@@ -919,7 +942,7 @@ class OllamaEngine(InferenceEngine):
         try:
             for text in texts:
                 response = self._post(
-                    "/api/embeddings", {"model": model, "prompt": text}
+                    "/api/embeddings", {"model": model, "prompt": text, "keep_alive": _KEEP_ALIVE}
                 )
                 vector = response.get("embedding")
                 if not isinstance(vector, list):
