@@ -37,26 +37,45 @@ backend:
   ollama_host: http://127.0.0.1:11434
 
 model:
-  # qwen3:4b (2.5 GB), NOT deepseek-r1:14b (9.0 GB), which this file named
-  # from 2026-08-06 to 2026-08-20 and which this machine could never serve:
-  # 15 GB of RAM total, ~4.4 GB available in normal use, and engine: ollama
-  # on CPU (/health reports cuda: false, gpu: null). The backend computes
-  # (free + resident - model_size - 3GB) / kv_bytes_per_token, so a 9.0 GB
-  # model made servable_context_length 0 - correctly, but silently, because
-  # the frontend's status check printed a 0 as "checkout is too old, pull
-  # it" until 2026-08-20. Keep the weights + 3 GB headroom inside what this
-  # laptop actually has free before changing this.
+  # Two independent reasons a model reads servable_context_length 0 on
+  # this machine, and only ONE of them is about memory. Both were live
+  # here on 2026-08-20 and they were initially confused for each other.
   #
-  # hermes3:8b (4.7 GB) is the operator's choice and fits the HARDWARE
-  # fine - 4.7 GB of weights on a 15 GB machine is not the constraint.
-  # What binds is what else is running: with ~10 GB held by browsers and
-  # editors, only ~5.8 GB is available, and 5.8 - 4.7 - 3 is negative, so
-  # servable_context_length reads 0 until memory is freed. Roughly 7.7 GB
-  # available gets it off zero and every further GB buys ~8k tokens
-  # (131,072 bytes/token: 32 layers x 8 kv-heads x 256 x 2).
-  # qwen3:4b (2.5 GB) and qwen3:1.7b (1.4 GB) are the fallbacks that serve
-  # a real window without closing anything.
-  id: hermes3:8b
+  # 1. THE FORMULA CANNOT COMPUTE IT. servable_context_length() needs
+  #    attention.key_length from Ollama /api/show, and returns 0 - meaning
+  #    "could not tell", not "no context" - when it is absent. Ollama does
+  #    not report it for llama- or qwen2-architecture models:
+  #
+  #      deepseek-r1:14b  arch qwen2  key_length ABSENT -> always 0
+  #      hermes3:8b       arch llama  key_length ABSENT -> always 0
+  #      qwen3:4b         arch qwen3  key_length 128    -> computable
+  #      qwen3:1.7b       arch qwen3  key_length 128    -> computable
+  #
+  #    No amount of free memory changes the first two. Do not pick a
+  #    llama/qwen2 model here expecting a window to appear once the
+  #    browsers are closed - it will not.
+  #
+  #    Do NOT "fix" this by deriving head_dim as embedding_length /
+  #    head_count: qwen3:4b reports key_length 128 while that derivation
+  #    gives 80, so a naive fallback would under-count the KV cache by 1.6x
+  #    and promise a context this machine cannot hold.
+  #
+  # 2. IT GENUINELY DOES NOT FIT. usable = available - weights - 3 GiB,
+  #    servable = usable / (blocks * kv_heads * (k+v) * 2). This box has
+  #    15 GiB with ~10 GiB held by browsers and editors, so ~5.1-5.8 GiB
+  #    is available and it MOVES:
+  #
+  #      qwen3:4b    2.33 GiB, 147,456 B/token, needs >5.33 GiB available
+  #                  -> 3,142 tokens at 5.78 GiB, 0 at 5.11 GiB. Marginal.
+  #      qwen3:1.7b  1.27 GiB, 114,688 B/token, needs >4.27 GiB available
+  #                  -> 7,859 tokens at 5.11 GiB. Always serves something.
+  #
+  # qwen3:4b is the operator's choice: this node is not used for /deepweb
+  # (which starts its context ladder at 4,096 and runs on ubi from this
+  # machine), so a few thousand tokens for chat is enough, and its window
+  # grows straight away when memory frees. Switch to qwen3:1.7b if a
+  # guaranteed non-zero window matters more than model quality.
+  id: qwen3:4b
   # Replaces the shared catalog wholesale when present (lists are not
   # merged element-wise). List what this machine has actually pulled.
   available:
