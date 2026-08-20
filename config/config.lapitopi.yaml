@@ -37,7 +37,26 @@ backend:
   ollama_host: http://127.0.0.1:11434
 
 model:
-  id: deepseek-r1:14b
+  # qwen3:4b (2.5 GB), NOT deepseek-r1:14b (9.0 GB), which this file named
+  # from 2026-08-06 to 2026-08-20 and which this machine could never serve:
+  # 15 GB of RAM total, ~4.4 GB available in normal use, and engine: ollama
+  # on CPU (/health reports cuda: false, gpu: null). The backend computes
+  # (free + resident - model_size - 3GB) / kv_bytes_per_token, so a 9.0 GB
+  # model made servable_context_length 0 - correctly, but silently, because
+  # the frontend's status check printed a 0 as "checkout is too old, pull
+  # it" until 2026-08-20. Keep the weights + 3 GB headroom inside what this
+  # laptop actually has free before changing this.
+  #
+  # hermes3:8b (4.7 GB) is the operator's choice and fits the HARDWARE
+  # fine - 4.7 GB of weights on a 15 GB machine is not the constraint.
+  # What binds is what else is running: with ~10 GB held by browsers and
+  # editors, only ~5.8 GB is available, and 5.8 - 4.7 - 3 is negative, so
+  # servable_context_length reads 0 until memory is freed. Roughly 7.7 GB
+  # available gets it off zero and every further GB buys ~8k tokens
+  # (131,072 bytes/token: 32 layers x 8 kv-heads x 256 x 2).
+  # qwen3:4b (2.5 GB) and qwen3:1.7b (1.4 GB) are the fallbacks that serve
+  # a real window without closing anything.
+  id: hermes3:8b
   # Replaces the shared catalog wholesale when present (lists are not
   # merged element-wise). List what this machine has actually pulled.
   available:
