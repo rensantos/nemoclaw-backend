@@ -5,4 +5,3 @@ logs/
 run/
 .claude/
 config/config.local.yaml
-config/config.ESP-SROB-PCPROF.yaml
