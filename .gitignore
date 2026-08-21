@@ -5,3 +5,4 @@ logs/
 run/
 .claude/
 config/config.local.yaml
+.venv/
