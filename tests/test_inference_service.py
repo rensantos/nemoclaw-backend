@@ -960,7 +960,22 @@ class EmbeddingServiceTests(unittest.TestCase):
 
         self.assertEqual(service._active_requests, 0)
 
-    def test_engine_failure_during_embed_degrades_the_service(self):
+    def test_engine_failure_during_embed_does_not_degrade_the_service(self):
+        """An embedding failure fails THAT REQUEST and nothing else.
+
+        It used to degrade the whole service, which contradicts embed()'s
+        own contract: the embedding model is deliberately unrelated to the
+        loaded chat model, so its failure is not evidence about the chat
+        model's health.
+
+        Measured 2026-08-29: one transient RemoteDisconnected on an embed
+        call, out of 390 sent during a long generation, killed that
+        generation - which the daemon went on to finish normally three
+        minutes later - and left the service refusing everything for seven
+        hours, since DEGRADED clears only by restarting.
+
+        A genuinely dead daemon is still caught by chat() and health(),
+        which are the paths that depend on the loaded model."""
         class FailingEmbed(self.EmbeddingEngine):
             def embed(self, texts, model):
                 raise EngineUnavailableError("daemon died")
@@ -970,5 +985,19 @@ class EmbeddingServiceTests(unittest.TestCase):
         with self.assertRaises(EngineUnavailableError):
             service.embed(["a"], "nomic-embed-text")
 
-        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)
+        self.assertEqual(service.lifecycle_state, LifecycleState.READY)
         self.assertEqual(service._active_requests, 0)
+
+    def test_chat_still_degrades_on_engine_failure(self):
+        """The narrowing is embed-only. chat() depends on the loaded model,
+        so its failure IS evidence the engine is gone."""
+        class FailingChat(self.EmbeddingEngine):
+            def chat(self, *a, **k):
+                raise EngineUnavailableError("daemon died")
+
+        service = _lifecycle_service(FailingChat())
+
+        with self.assertRaises(EngineUnavailableError):
+            service.chat([{"role": "user", "content": "hi"}], 10, 0.0)
+
+        self.assertEqual(service.lifecycle_state, LifecycleState.DEGRADED)

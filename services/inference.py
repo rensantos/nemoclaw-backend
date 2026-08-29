@@ -240,11 +240,29 @@ class InferenceService:
         if not self.engine.supports_embeddings:
             raise EmbeddingsNotSupportedError(type(self.engine).__name__)
         with self._serving():
-            try:
-                return self.engine.embed(texts, model)
-            except EngineUnavailableError:
-                self.lifecycle_state = LifecycleState.DEGRADED
-                raise
+            # An embedding failure fails THIS REQUEST and nothing else.
+            #
+            # It used to set DEGRADED for the whole service, which
+            # contradicts the paragraph above: the embedding model is
+            # deliberately unrelated to the loaded chat model, so a
+            # nomic-embed-text reload hiccup is not evidence about gemma4's
+            # health. They are different models in different runners.
+            #
+            # Measured 2026-08-29. A research run was synthesising on this
+            # node while another run read on a remote one; embeddings are
+            # pinned to the local backend by design, so 390 embed requests
+            # arrived during a long generation. ONE caught a transient
+            # RemoteDisconnected while the embedding model reloaded, and
+            # that killed the generation - which Ollama went on to finish
+            # normally three minutes later - and left the service refusing
+            # everything for SEVEN HOURS, since DEGRADED clears only by
+            # restarting. The cheapest, most retryable call in the system
+            # took down the most expensive one.
+            #
+            # A genuinely dead daemon is still caught: chat() and health()
+            # both still degrade on EngineUnavailableError, and they are
+            # the paths that actually depend on the loaded model.
+            return self.engine.embed(texts, model)
 
     def pull_model(self, model_id: str):
         """Downloads a model, refusing when the disk cannot take it.
