@@ -1,0 +1,28 @@
+# Per-machine config for this desktop, layered over config/config.yaml.
+# See config/config.example.machine.yaml for the full template and
+# layering explanation. Found automatically by hostname (ESP-S319-PC04),
+# so it applies however the backend is invoked - with or without
+# INSTANCE set.
+#
+# Single RTX 3060 (12GB) under WSL, shared with Windows - not UBI's
+# GPU 2,3 / qwen3:30b from the shared config.yaml.
+
+backend:
+  instance: esp-s319-pc04
+  # 8000 is often the SSH tunnel to a remote node (e.g. UBI) - the local
+  # backend needs its own port.
+  port: 8001
+  gpu: "0"
+  engine: ollama
+  ollama_host: http://127.0.0.1:11434
+
+model:
+  # gemma4:12b (10.6GiB) - fits the 12GB card with limited headroom.
+  # deepseek-r1:14b (12.6GiB, also pulled here) does not fit with any
+  # headroom on this size card and is known to push the backend into
+  # `degraded` under WSL where the GPU is shared with Windows - see
+  # docs/NEXT_STEPS.md §0.4 for the same finding on comparable hardware.
+  id: gemma4:12b
+  # No `available:` list - ModelManager derives the selectable catalog
+  # from the Ollama daemon itself, so whatever is pulled here is already
+  # selectable.
