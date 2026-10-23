@@ -806,6 +806,7 @@ class OllamaEngine(InferenceEngine):
         info = shown.get("model_info")
         if not isinstance(info, dict):
             return 0
+
         lengths = []
         for key, value in info.items():
             if str(key).endswith(".context_length"):
@@ -852,6 +853,17 @@ class OllamaEngine(InferenceEngine):
         if not isinstance(info, dict):
             return 0
 
+        # Ollama hides per-layer arrays unless verbose is requested.
+        kv_counts = next((v for k, v in info.items() if str(k).endswith('.attention.head_count_kv')), None)
+        if kv_counts is None:
+            try:
+                info = self._post('/api/show', {'model': target, 'verbose': True}).get('model_info')
+            except EngineUnavailableError:
+                return 0
+            if not isinstance(info, dict):
+                return 0
+            kv_counts = next((v for k, v in info.items() if str(k).endswith('.attention.head_count_kv')), None)
+
         def field(suffix: str) -> int:
             for key, value in info.items():
                 if str(key).endswith(suffix):
@@ -865,9 +877,18 @@ class OllamaEngine(InferenceEngine):
         kv_heads = field(".attention.head_count_kv")
         key_len = field(".attention.key_length")
         value_len = field(".attention.value_length") or key_len
-        if not (layers and kv_heads and key_len):
+        if not (layers and key_len):
             return 0
-        kv_per_token = layers * kv_heads * (key_len + value_len) * _KV_CACHE_BYTES_PER_ELEMENT
+        if isinstance(kv_counts, list):
+            if len(kv_counts) != layers or any(type(n) is not int or n <= 0 for n in kv_counts):
+                return 0
+            heads_total = sum(kv_counts)
+        elif kv_heads > 0:
+            heads_total = layers * kv_heads
+        else:
+            return 0
+        # Conservatively count even sliding-window layers at full context.
+        kv_per_token = heads_total * (key_len + value_len) * _KV_CACHE_BYTES_PER_ELEMENT
 
         model_max = self.model_context_length(target)
         if model_max <= 0:

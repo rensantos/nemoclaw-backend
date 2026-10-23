@@ -1,5 +1,12 @@
 # Nemoclaw Backend
 
+Context capacity supports per-layer KV-head arrays (2026-10-23): when
+normal Ollama metadata hides an array, verbose metadata is requested.
+The backend sums validated per-layer heads, conservatively counting every
+layer at full context even for sliding-window attention. Missing or invalid
+metadata still refuses capacity; no architectural maximum substitutes for
+available-memory computation.
+
 OpenAI-compatible FastAPI backend for local and future provider-backed
 inference management.
 

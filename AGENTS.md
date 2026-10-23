@@ -4,6 +4,11 @@ Behavioral contract for coding agents working on `nemoclaw-backend`.
 
 ## Project Identity
 
+Context sizing must handle per-layer KV-head arrays from verbose Ollama
+metadata. Validate layer counts and positive heads, sum per-layer storage,
+and conservatively count sliding-window layers at full context. Unknown
+metadata refuses capacity rather than substituting the model maximum.
+
 `nemoclaw-backend` is a unified inference management backend. It is not only a
 Transformers server, and it is not an orchestrator.
 

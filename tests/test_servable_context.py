@@ -50,6 +50,23 @@ def engine_with(info, tags_size, resident_size, available_bytes):
 
 
 class ServableContextTests(unittest.TestCase):
+    def test_per_layer_kv_heads_use_verbose_metadata(self):
+        info = {**QWEN3_MOE_INFO, 'qwen3moe.attention.head_count_kv': None}
+        engine = engine_with(info, GB, 0, 10 * GB)
+        verbose = {**info, 'qwen3moe.attention.head_count_kv': [4] * 48}
+        post = mock.Mock(side_effect=lambda path, payload: {
+            'model_info': verbose if payload.get('verbose') else info})
+        engine._post = post
+        with mock.patch('engines.ollama_engine._available_memory_bytes', return_value=10 * GB):
+            actual = engine.servable_context_length()
+        self.assertEqual(actual, self._servable(10 * GB, tags_size=GB))
+        self.assertTrue(any(call.args[1].get('verbose') for call in post.call_args_list))
+
+    def test_invalid_per_layer_kv_metadata_refuses_capacity(self):
+        for heads in ([4] * 47, [4] * 47 + [None], [4] * 47 + [-1]):
+            info = {**QWEN3_MOE_INFO, 'qwen3moe.attention.head_count_kv': heads}
+            self.assertEqual(self._servable(10 * GB, info=info), 0)
+
     def _servable(self, available, tags_size=int(18.6 * GB), resident=0, info=None):
         engine = engine_with(info or QWEN3_MOE_INFO, tags_size, resident, available)
         with mock.patch("engines.ollama_engine._available_memory_bytes", return_value=available):
